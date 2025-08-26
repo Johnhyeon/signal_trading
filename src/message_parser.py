@@ -7,67 +7,110 @@ def parse_telegram_message(message_text):
     텔레그램 메시지 텍스트를 파싱하여 주문 정보를 추출합니다.
     """
     try:
+        # 1. TP와 SL을 먼저 파싱하여 포지션 방향을 결정
+        all_tp_matches = re.findall(r'TP(?:\d+)?:\s*([\d\.-]+)', message_text, re.IGNORECASE)
+        sl_match_final = re.search(r'Stop\s*Loss?:\s*([\d\.]+)', message_text, re.IGNORECASE)
+
+        if not sl_match_final or not all_tp_matches:
+            print("TP 또는 SL 정보를 찾을 수 없습니다. 파싱 실패.")
+            return None
+        
+        # 하이픈으로 연결된 TP 값 분리
+        targets = []
+        for tp_string in all_tp_matches:
+            # 하이픈으로 연결된 문자열을 분리하여 리스트에 추가
+            parts = tp_string.split('-')
+            for part in parts:
+                targets.append(float(part))
+                
+        stop_loss = float(sl_match_final.group(1))
+        
+        # 첫 번째 TP와 SL을 비교하여 포지션 방향 결정
+        first_tp = targets[0]
+        side = "Buy" if first_tp > stop_loss else "Sell"
+
+        # 2. 'Long'/'Short' 구문이 없는 메시지 형식을 처리 (이모티콘 스티커 케이스)
+        symbol_match_emoji = re.search(r'([A-Z0-9]+)/([A-Z]+)', message_text)
+        entry_now_match = re.search(r'Entry NOW', message_text)
+
+        if symbol_match_emoji and entry_now_match:
+            symbol = symbol_match_emoji.group(1) + symbol_match_emoji.group(2)
+            entry_price = "NOW"
+            leverage = None  # trade_executor.py에서 결정하도록 None으로 설정
+            fund_percentage = 0.05
+            
+            return {
+                'symbol': symbol,
+                'side': side,
+                'leverage': leverage,
+                'fund_percentage': fund_percentage,
+                'entry_price': entry_price,
+                'stop_loss': stop_loss,
+                'targets': targets
+            }
+            
+        # 3. 기존 메시지 형식 처리 (기존 로직 유지)
         symbol_match = re.search(r'\$([A-Z0-9]+)', message_text)
         leverage_match = re.search(r'Leverage:\s*x(\d+)', message_text)
         fund_match = re.search(r'Fund:\s*(\d+)%', message_text)
         entry_match = re.search(r'Entry:\s*(NOW|[\d]+xx|[\d]+x|\d+(?:\.\d+)?x|\d+(?:\.\d+)?)', message_text)
-        sl_match = re.search(r'Stop\s*Loss?:\s*([\d\.]+)', message_text)
         tp_matches = re.findall(r'TP\d+:\s*([\d\.]+)', message_text)
-       # 'Long' 또는 'Short' 문구가 있는지 먼저 확인
-        position_type = "Buy" if "Long" in message_text else "Sell" if "Short" in message_text else None
         
-        if not all([symbol_match, leverage_match, fund_match, entry_match, sl_match, tp_matches, position_type]):
-            print("메시지 형식이 올바르지 않아 파싱에 실패했습니다.")
+        if not all([symbol_match, leverage_match, fund_match, entry_match, sl_match_final, tp_matches]):
+            print("기존 메시지 형식이 올바르지 않습니다.")
             return None
 
         symbol = symbol_match.group(1) + "USDT"
         leverage = int(leverage_match.group(1))
-        fund_percentage = 0.05
-        stop_loss = float(sl_match.group(1))
-        targets = [float(tp) for tp in tp_matches]
-
+        fund_percentage = float(fund_match.group(1)) / 100
+        
         entry_price_str = entry_match.group(1)
-        entry_price = None
-        print("Entry price str:", entry_price_str)
-        # entry_price = float(entry_price_str.replace('x', ''))
-        # print("Initial entry price:", entry_price)
-
+        
         if 'xx' in entry_price_str:
             base_price_str = entry_price_str.replace('xx', '')
             base_price = int(base_price_str)
             random_digits = random.randint(0, 99)
-            
-            # 정수형 가격에 100을 곱한 뒤 난수 추가
             entry_price = float(base_price * 100 + random_digits)
         elif entry_price_str.endswith('x'):
             if '.' in entry_price_str:
-                # 소수점 케이스: 0.84x -> 0.84 + 난수(0~9)
                 base_price_str = entry_price_str.replace('x', '')
                 base_price = float(base_price_str)
                 random_digit = random.randint(0, 9)
-                
-                # 소수점 아래 자릿수를 계산하여 정확한 위치에 난수 추가
                 decimal_places = len(base_price_str.split('.')[1])
                 entry_price = round(base_price + random_digit * (10 ** -(decimal_places + 1)), decimal_places + 1)
             else:
-                # 정수 케이스: 451x -> 451 + 난수(0~9)
                 base_price_str = entry_price_str.replace('x', '')
                 base_price = int(base_price_str)
                 random_digit = random.randint(0, 9)
                 entry_price = float(str(base_price) + str(random_digit))
+        elif entry_price_str == "NOW":
+            entry_price = "NOW"
         else:
             entry_price = float(entry_price_str)
-
-        print("Final entry price:", entry_price)
+            
         return {
             'symbol': symbol,
-            'side': position_type,
+            'side': side,
             'leverage': leverage,
             'fund_percentage': fund_percentage,
             'entry_price': entry_price,
             'stop_loss': stop_loss,
             'targets': targets
         }
+        
     except Exception as e:
         print(f"메시지 파싱 중 오류 발생: {e}")
         return None
+    
+def parse_cancel_message(message_text):
+    """
+    'Cancel' 메시지를 파싱하여 종목명을 추출합니다.
+    예: "Cancel APT" -> "APT"
+    """
+    # 'Cancel' 뒤에 오는 종목명을 찾습니다. 대소문자 무시
+    cancel_match = re.search(r'Cancel\s+\$?([A-Z0-9]+)', message_text, re.IGNORECASE)
+    
+    if cancel_match:
+        return cancel_match.group(1).upper() + "USDT"
+    
+    return None

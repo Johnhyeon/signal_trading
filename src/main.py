@@ -4,8 +4,8 @@ from telethon import events
 
 # 다른 파일에서 필요한 것들을 불러옵니다.
 from api_clients import client, TARGET_CHANNEL_ID, TEST_CHANNEL_ID
-from message_parser import parse_telegram_message
-from trade_executor import execute_bybit_order, get_order_status, active_orders, bybit_client
+from message_parser import parse_telegram_message, parse_cancel_message
+from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, send_bybit_cancel_msg
 
 print("Application run...")
 print("Instance created")
@@ -16,6 +16,13 @@ print("Instance created")
 @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, outgoing=True))
 async def my_event_handler(event):
     message_text = event.message.message
+
+    # 'Cancel' 메시지인지 먼저 확인
+    symbol_to_cancel = parse_cancel_message(message_text)
+    if symbol_to_cancel:
+        await cancel_bybit_order(symbol_to_cancel)
+        return # 취소 메시지이므로 주문 로직은 실행하지 않음
+    
     order_info = parse_telegram_message(message_text)
     
     if order_info:
@@ -25,9 +32,17 @@ async def my_event_handler(event):
     now = datetime.now()
     print("Target spoke", "time:", now.date(), now.time())
 
+##### 테스트용
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID, outgoing=True))
 async def my_event_handler(event):
     message_text = event.message.message
+
+    # 'Cancel' 메시지인지 먼저 확인
+    symbol_to_cancel = parse_cancel_message(message_text)
+    if symbol_to_cancel:
+        await cancel_bybit_order(symbol_to_cancel)
+        return # 취소 메시지이므로 주문 로직은 실행하지 않음
+    
     order_info = parse_telegram_message(message_text)
     
     if order_info:
@@ -73,6 +88,7 @@ async def handle_edited_message(event):
         
         if cancel_result['retCode'] == 0:
             print(f"기존 주문 {bybit_order_id}가 성공적으로 취소되었습니다.")
+            await send_bybit_cancel_msg(symbol_to_cancel)
         else:
             print(f"기존 주문 취소 실패: {cancel_result['retMsg']}")
             # 이미 체결된 주문이라 취소에 실패한 경우에도 재주문 로직은 계속 진행
