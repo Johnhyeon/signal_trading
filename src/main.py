@@ -13,7 +13,7 @@ print("Instance created")
 # -----------------
 # 텔레그램 메시지 이벤트 핸들러
 # -----------------
-@client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, outgoing=True))
+@client.on(events.NewMessage(chats=TARGET_CHANNEL_ID))
 async def my_event_handler(event):
     message_text = event.message.message
     print(f"\n새로운 메시지 감지:\n{message_text}")
@@ -151,7 +151,7 @@ async def main():
 
     # --- 연결 상태 확인 로직 추가 ---
     try:
-        # Bybit 연결 상태 확인 (계좌 잔고 조회)
+        # Bybit 연결 상태 확인
         balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
         if balance['retCode'] == 0:
             print("✅ Bybit API 연결 성공!")
@@ -192,11 +192,3 @@ async def main():
 
 with client:
     client.loop.run_until_complete(main())
-
-#     print("Listening for new message...")
-#     now = datetime.now()
-#     print("Program Start", "time:", now.date(), now.time())
-#     await client.run_until_disconnected()
-
-# with client:
-#     client.loop.run_until_complete(main())
