@@ -86,7 +86,7 @@ async def my_event_handler_Test(event):
     await asyncio.sleep(0) 
     # --- 테스트용 채널 메시지 감지 ---
 
-@client.on(events.MessageEdited)
+@client.on(events.MessageEdited(chats=TEST_CHANNEL_ID, outgoing=True))
 async def handle_edited_message(event):
     global active_orders
     message_id = event.id
