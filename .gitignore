@@ -5,8 +5,10 @@
 *.session
 
 *.pyc
+*.json
 auto_trader.py
 tele_test.py
 test.py
 
 trading/
+log/
