@@ -1,8 +1,10 @@
 import asyncio
+from datetime import datetime
 import decimal
 import time
 from api_clients import bybit_client, bybit_bot, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message
+from portfolio_manager import record_trade_result
 # 수정: main.py 대신 utils.py에서 메시지 변수 임포트
 from utils import MESSAGES
 
@@ -58,6 +60,63 @@ async def send_bybit_failure_msg(symbol, reason):
         text=message_summary,
         parse_mode='Markdown'
     )
+
+async def record_trade_result_on_close(symbol):
+    """
+    포지션이 청산될 때까지 모니터링하고, 청산되면 거래 결과를 기록합니다.
+    """
+    print(MESSAGES['monitor_position_close'].format(symbol=symbol))
+    
+    # 이전에 열린 포지션이 있는지 확인하는 플래그
+    is_position_open = False
+    
+    while True:
+        try:
+            positions_info = bybit_client.get_positions(category="linear", symbol=symbol)
+            
+            if positions_info['retCode'] == 0 and positions_info['result']['list']:
+                position = positions_info['result']['list'][0]
+                
+                # 포지션이 열렸는지 확인
+                if float(position['size']) > 0:
+                    is_position_open = True
+                
+                # 포지션이 열린 후 닫혔는지 확인
+                if is_position_open and float(position['size']) == 0:
+                    print(MESSAGES['position_closed_success'].format(symbol=symbol))
+                    
+                    # 닫힌 PNL 정보 가져오기
+                    closed_pnl_info = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=1)
+                    
+                    if closed_pnl_info['retCode'] == 0 and closed_pnl_info['result']['list']:
+                        closed_trade_data = closed_pnl_info['result']['list'][0]
+                        
+                        trade_result = {
+                            'symbol': closed_trade_data['symbol'],
+                            'side': closed_trade_data['side'],
+                            'entry_price': float(closed_trade_data['avgEntryPrice']),
+                            'exit_price': float(closed_trade_data['avgExitPrice']),
+                            'qty': float(closed_trade_data['closedSize']),
+                            'pnl': float(closed_trade_data['closedPnl']),
+                            'created_at': datetime.fromtimestamp(int(closed_trade_data['createdTime']) / 1000).isoformat()
+                        }
+                        
+                        # 새로운 파일에 기록
+                        record_trade_result(trade_result)
+                        
+                        print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
+                        await bybit_bot.send_message(
+                            chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                            text=MESSAGES['trade_closed_pnl_message'].format(symbol=symbol, pnl=trade_result['pnl'])
+                        )
+                    else:
+                        print(MESSAGES['trade_record_fetch_fail'].format(symbol=symbol))
+                        
+                    return # 작업 완료 후 루프 종료
+        except Exception as e:
+            print(MESSAGES['position_monitor_error'].format(error_msg=e))
+            
+        await asyncio.sleep(5) # 5초 대기
 
 def execute_bybit_order(order_info, message_id):
     """
@@ -357,6 +416,13 @@ def execute_bybit_order(order_info, message_id):
                 send_bybit_summary_msg(order_info, adjusted_qty, order_result),
                 asyncio.get_event_loop()
             )
+
+            # ✅ 포지션 청산 모니터링 시작
+            asyncio.run_coroutine_threadsafe(
+                record_trade_result_on_close(order_info['symbol']),
+                asyncio.get_event_loop()
+            )
+            
         else:
             print(MESSAGES['position_info_error'])
             asyncio.run_coroutine_threadsafe(

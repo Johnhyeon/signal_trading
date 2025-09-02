@@ -110,5 +110,11 @@
   "report_total_pnl": "💰 **총 손익 (P&L)**: {total_pnl:.2f} USDT",
   "report_win_rate": "🎯 **승률**: {win_rate:.2f}%",
   "leverage_exceeded_warning": "⚠️ 요청된 레버리지({requested_leverage}x)가 해당 종목의 최대치({max_leverage}x)를 초과하여, 자동으로 조정됩니다.",
-  "sl_move_to_market_price": "Entry NOW 주문이므로 SL을 현재 시장가({price})로 이동합니다."
+  "sl_move_to_market_price": "Entry NOW 주문이므로 SL을 현재 시장가({price})로 이동합니다.",
+  "monitor_position_close": "[{symbol}] 포지션 청산 모니터링을 시작합니다...",
+  "position_closed_success": "✅ [{symbol}] 포지션이 청산되었습니다. 거래 기록을 가져옵니다.",
+  "trade_record_saved_success": "📊 [{symbol}] 거래 기록이 성공적으로 저장되었습니다.",
+  "trade_record_fetch_fail": "❌ [{symbol}] 거래 기록을 가져오는 데 실패했습니다.",
+  "trade_closed_pnl_message": "📊 **{symbol} 거래 종료**\n▪️ P&L: `{pnl:.2f}` USDT",
+  "position_monitor_error": "포지션 청산 모니터링 중 오류 발생: {error_msg}"
 }

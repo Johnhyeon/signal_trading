@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 환경 변수에서 언어 코드 가져오기
-LANG_CODE = os.getenv('LANG_CODE', 'ko')
+LANG_CODE = os.getenv('LANG_CODE')
 
 def load_messages(lang_code):
     """

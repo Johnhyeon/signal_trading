@@ -110,5 +110,11 @@
   "report_total_pnl": "💰 **Total P&L**: {total_pnl:.2f} USDT",
   "report_win_rate": "🎯 **Win Rate**: {win_rate:.2f}%",
   "leverage_exceeded_warning": "⚠️ Requested leverage ({requested_leverage}x) exceeds the maximum ({max_leverage}x) for this symbol. Automatically adjusting.",
-  "sl_move_to_market_price": "Since this was an Entry NOW order, SL is moved to the current market price ({price})."
+  "sl_move_to_market_price": "Since this was an Entry NOW order, SL is moved to the current market price ({price}).",
+  "monitor_position_close": "[{symbol}] Starting position liquidation monitoring...",
+  "position_closed_success": "✅ [{symbol}] Position has been liquidated. Retrieving trade record.",
+  "trade_record_saved_success": "📊 [{symbol}] Trade record successfully saved.",
+  "trade_record_fetch_fail": "❌ [{symbol}] Failed to fetch trade record.",
+  "trade_closed_pnl_message": "📊 **{symbol} Trade Closed**\n▪️ P&L: `{pnl:.2f}` USDT",
+  "position_monitor_error": "Error during position liquidation monitoring: {error_msg}"
 }
