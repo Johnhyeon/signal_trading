@@ -1,3 +1,7 @@
+### [README_KO](https://github.com/Johnhyeon/signal_trading/blob/master/README.md)
+### [README_EN](https://github.com/Johnhyeon/signal_trading/blob/master/README_en.md)
+---
+
 # 📈 텔레그램 기반 자동 거래 봇
 텔레그램 채널 신호를 자동으로 감지하여 Bybit 선물 거래를 실행하는 자동 매매 봇
 이 봇은 지정된 텔레그램 메시지를 파싱하고, Bybit API를 통해 실시간으로 주문을 실행/관리하며, 모든 결과를 로그 채널로 전송합니다.
@@ -118,4 +122,5 @@ pause
 본 프로젝트는 교육 및 연구 목적으로 제작되었습니다.
 실제 거래에 사용할 경우, 반드시 테스트넷 환경에서 충분히 검증 후 사용하세요.
 암호화폐 거래는 높은 리스크가 있으므로, 모든 책임은 사용자 본인에게 있습니다.
+
 
