@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import datetime
+from utils import MESSAGES
 
 # 거래 기록을 저장할 파일 경로
 LOG_DIR = os.path.join("..", "log")
@@ -28,7 +29,7 @@ def record_trade_result(trade_data):
     with open(TRADE_LOG_FILE, 'w', encoding='utf-8') as f:
         json.dump(logs, f, indent=4, ensure_ascii=False)
     
-    print(f"✅ 거래 기록이 {TRADE_LOG_FILE}에 추가되었습니다.")
+    print(MESSAGES['record_trade_success'].format(TRADE_LOG_FILE=TRADE_LOG_FILE))
 
 def generate_report(period='all'):
     """
@@ -39,7 +40,7 @@ def generate_report(period='all'):
         with open(TRADE_LOG_FILE, 'r', encoding='utf-8') as f:
             logs = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return "⚠️ 아직 거래 기록이 없습니다."
+        return MESSAGES['no_trade_log']
 
     # 기간 필터링 (현재는 전체 기간만 지원)
     if period == 'all':
@@ -49,7 +50,7 @@ def generate_report(period='all'):
         filtered_logs = logs
 
     if not filtered_logs:
-        return "⚠️ 해당 기간 동안의 거래 기록이 없습니다."
+        return MESSAGES['no_trades_in_period']
 
     total_pnl = sum(log.get('pnl', 0) for log in filtered_logs)
     win_trades = sum(1 for log in filtered_logs if log.get('pnl', 0) > 0)
@@ -57,10 +58,10 @@ def generate_report(period='all'):
     win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
     
     report_message = (
-        f"📊 **포트폴리오 통계 리포트** ({period.capitalize()})\n\n"
-        f"🔄 **총 거래 횟수**: {total_trades}\n"
-        f"💰 **총 손익 (P&L)**: {total_pnl:.2f} USDT\n"
-        f"🎯 **승률**: {win_rate:.2f}%\n"
+        MESSAGES['report_title'].format(period=period.capitalize()) + "\n\n"
+        f"{MESSAGES['report_total_trades'].format(total_trades=total_trades)}\n"
+        f"{MESSAGES['report_total_pnl'].format(total_pnl=total_pnl)}\n"
+        f"{MESSAGES['report_win_rate'].format(win_rate=win_rate)}\n"
     )
     
     return report_message

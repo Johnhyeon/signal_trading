@@ -1,6 +1,7 @@
 import re
 import random
 import decimal
+from utils import MESSAGES # 추가
 
 def parse_telegram_message(message_text):
     """
@@ -12,7 +13,7 @@ def parse_telegram_message(message_text):
         sl_match_final = re.search(r'Stop\s*Loss?:\s*([\d\.]+)', message_text, re.IGNORECASE)
 
         if not sl_match_final or not all_tp_matches:
-            print("TP 또는 SL 정보를 찾을 수 없습니다. 파싱 실패.")
+            print(MESSAGES['parsing_failed_tp_sl'])
             return None
         
         # 하이픈으로 연결된 TP 값 분리
@@ -57,7 +58,7 @@ def parse_telegram_message(message_text):
         tp_matches = re.findall(r'TP\d+:\s*([\d\.]+)', message_text)
         
         if not all([symbol_match, leverage_match, fund_match, entry_match, sl_match_final, tp_matches]):
-            print("기존 메시지 형식이 올바르지 않습니다.")
+            print(MESSAGES['parsing_failed_old_format'])
             return None
 
         symbol = symbol_match.group(1) + "USDT"
@@ -99,7 +100,7 @@ def parse_telegram_message(message_text):
         }
         
     except Exception as e:
-        print(f"메시지 파싱 중 오류 발생: {e}")
+        print(MESSAGES['parsing_error'], e)
         return None
     
 def parse_cancel_message(message_text):
