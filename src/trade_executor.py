@@ -94,11 +94,11 @@ def execute_bybit_order(order_info, message_id):
             # Entry NOW일 때 종목별 레버리지 설정 로직 추가
             symbol = original_symbol
             if symbol == 'BTCUSDT' or symbol == 'ETHUSDT':
-                order_info['leverage'] = 10
+                order_info['leverage'] = 100
             elif symbol == 'SOLUSDT':
-                order_info['leverage'] = 3
+                order_info['leverage'] = 35
             else:
-                order_info['leverage'] = 1
+                order_info['leverage'] = 10
             
             ticker_info = bybit_client.get_tickers(category="linear", symbol=original_symbol)
             current_price = float(ticker_info['result']['list'][0]['lastPrice'])
