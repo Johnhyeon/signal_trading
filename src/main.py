@@ -7,6 +7,7 @@ from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST
 from message_parser import parse_telegram_message, parse_cancel_message
 # update_stop_loss_to_entry 함수를 import합니다.
 from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, send_bybit_failure_msg, send_bybit_cancel_msg, update_stop_loss_to_entry, update_stop_loss_to_tp1, update_stop_loss_to_tp2
+from portfolio_manager import generate_report
 
 print("Application run...")
 print("Instance created")
@@ -23,12 +24,6 @@ async def my_event_handler(event):
     if event.is_reply:
         print("⚠️ 답장 메시지는 SL 핸들러에서 처리됩니다.")
         return
-    
-    # 'Cancel' 메시지인지 먼저 확인
-    symbol_to_cancel = parse_cancel_message(message_text)
-    if symbol_to_cancel:
-        await cancel_bybit_order(symbol_to_cancel)
-        return # 취소 메시지이므로 주문 로직은 실행하지 않음
     
     order_info = parse_telegram_message(message_text)
     
@@ -171,6 +166,16 @@ async def handle_cancel_reply(event):
 async def my_event_handler(event):
     message_text = event.message.message
     print(f"\n새로운 메시지 감지:\n{message_text}")
+
+    # ✅ 'PF' 메시지 감지 및 포트폴리오 리포트 전송
+    if message_text.strip().upper() == 'PF':
+        report = generate_report()
+        await bybit_bot.send_message(
+            chat_id=TELE_BYBIT_LOG_CHAT_ID,
+            text=report,
+            parse_mode='Markdown'
+        )
+        return
     
     # ✅ 답장 메시지인 경우 바로 종료
     if event.is_reply:
