@@ -108,5 +108,7 @@
   "report_title": "📊 **포트폴리오 통계 리포트** ({period})",
   "report_total_trades": "🔄 **총 거래 횟수**: {total_trades}",
   "report_total_pnl": "💰 **총 손익 (P&L)**: {total_pnl:.2f} USDT",
-  "report_win_rate": "🎯 **승률**: {win_rate:.2f}%"
+  "report_win_rate": "🎯 **승률**: {win_rate:.2f}%",
+  "leverage_exceeded_warning": "⚠️ 요청된 레버리지({requested_leverage}x)가 해당 종목의 최대치({max_leverage}x)를 초과하여, 자동으로 조정됩니다.",
+  "sl_move_to_market_price": "Entry NOW 주문이므로 SL을 현재 시장가({price})로 이동합니다."
 }

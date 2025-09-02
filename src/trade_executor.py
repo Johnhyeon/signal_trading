@@ -50,7 +50,7 @@ async def send_bybit_failure_msg(symbol, reason):
     """
     message_summary = (
         MESSAGES['order_fail_title'].format(symbol=symbol) + "\n"
-        f"▪️ **사유:** {reason}"
+        f"▪️ **사유:** `{reason}`"
     )
 
     await bybit_bot.send_message(
@@ -91,6 +91,32 @@ def execute_bybit_order(order_info, message_id):
         trade_amount = total_usdt * order_info['fund_percentage']
 
         if order_info['entry_price'] == 'NOW':
+            # Entry NOW일 때 종목별 레버리지 설정 로직 추가
+            symbol = original_symbol
+            if symbol == 'BTCUSDT' or symbol == 'ETHUSDT':
+                order_info['leverage'] = 10
+            elif symbol == 'SOLUSDT':
+                order_info['leverage'] = 3
+            else:
+                order_info['leverage'] = 1
+            
+            ticker_info = bybit_client.get_tickers(category="linear", symbol=original_symbol)
+            current_price = float(ticker_info['result']['list'][0]['lastPrice'])
+            order_qty = (trade_amount * order_info['leverage']) / current_price
+        else:
+            order_qty = (trade_amount * order_info['leverage']) / float(order_info['entry_price'])
+
+        # 1-1. 계좌 잔고 조회 및 주문 수량 계산 (로직 유지)
+        wallet_balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
+        usdt_balance = next((item for item in wallet_balance['result']['list'][0]['coin'] if item['coin'] == 'USDT'), None)
+        if not usdt_balance:
+            print(MESSAGES['usdt_balance_not_found'])
+            return
+
+        total_usdt = float(usdt_balance['equity'])
+        trade_amount = total_usdt * order_info['fund_percentage']
+
+        if order_info['entry_price'] == 'NOW':
             ticker_info = bybit_client.get_tickers(category="linear", symbol=original_symbol)
             current_price = float(ticker_info['result']['list'][0]['lastPrice'])
             order_qty = (trade_amount * order_info['leverage']) / current_price
@@ -107,15 +133,68 @@ def execute_bybit_order(order_info, message_id):
         quantized_qty = adjusted_qty_decimal.quantize(decimal.Decimal('0.' + '0'*precision))
 
         # 1-3. 레버리지 설정 (로직 유지)
-        position_info = bybit_client.get_positions(category="linear", symbol=original_symbol)
-        current_leverage = int(position_info['result']['list'][0]['leverage']) if position_info['retCode'] == 0 and position_info['result']['list'] else 0
-        if current_leverage != order_info['leverage']:
-            bybit_client.set_leverage(
-                category="linear",
-                symbol=original_symbol,
-                buyLeverage=str(order_info['leverage']),
-                sellLeverage=str(order_info['leverage'])
-            )
+        try:
+            position_info = bybit_client.get_positions(category="linear", symbol=original_symbol)
+            current_leverage = int(position_info['result']['list'][0]['leverage']) if position_info['retCode'] == 0 and position_info['result']['list'] else 0
+            
+            # 현재 레버리지와 요청된 레버리지가 다를 경우에만 설정
+            if float(current_leverage) != order_info['leverage']:
+                bybit_client.set_leverage(
+                    category="linear",
+                    symbol=original_symbol,
+                    buyLeverage=str(order_info['leverage']),
+                    sellLeverage=str(order_info['leverage'])
+                )
+            else:
+                print("ℹ️ 레버리지가 이미 설정된 값과 동일합니다. 변경을 건너뜁니다.")
+        
+        except Exception as e:
+            error_message = str(e)
+            # 레버리지 관련 에러인지 확인
+            if 'leverage invalid' in error_message or 'leverage not modified' in error_message:
+                print(f"⚠️ 레버리지 설정 오류 발생. 최대 레버리지를 확인합니다.")
+                # 종목 정보 조회
+                instrument_info = bybit_client.get_instruments_info(category="linear", symbol=original_symbol)
+                if instrument_info['retCode'] == 0 and instrument_info['result']['list']:
+                    max_leverage = instrument_info['result']['list'][0]['leverageFilter']['maxLeverage']
+                    
+                    if order_info['leverage'] > float(max_leverage):
+                        # 요청 레버리지 조정
+                        order_info['leverage'] = float(max_leverage)
+                        print(MESSAGES['leverage_exceeded_warning'].format(
+                            requested_leverage=int(order_info['leverage']),
+                            max_leverage=max_leverage
+                        ))
+                    
+                    # 레버리지를 재조정했더라도, 현재 포지션의 레버리지와 비교하여 불필요한 호출을 막음
+                    position_info_after_adjust = bybit_client.get_positions(category="linear", symbol=original_symbol)
+                    current_leverage_after_adjust = int(position_info_after_adjust['result']['list'][0]['leverage']) if position_info_after_adjust['retCode'] == 0 and position_info_after_adjust['result']['list'] else 0
+
+                    if float(current_leverage_after_adjust) != order_info['leverage']:
+                        bybit_client.set_leverage(
+                            category="linear",
+                            symbol=original_symbol,
+                            buyLeverage=str(order_info['leverage']),
+                            sellLeverage=str(order_info['leverage'])
+                        )
+                    else:
+                        print("ℹ️ 레버리지 자동 조정 후 확인 결과, 이미 설정된 값과 동일합니다. 변경을 건너뜁니다.")
+
+                else:
+                    print("종목 정보를 가져오는 데 실패했습니다. 레버리지 자동 조정 불가.")
+                    asyncio.run_coroutine_threadsafe(
+                        send_bybit_failure_msg(original_symbol, reason="Failed to get instrument info for leverage adjustment."),
+                        asyncio.get_event_loop()
+                    )
+                    return
+            else:
+                # 레버리지 관련 오류가 아닌 경우
+                print(f"Bybit 레버리지 설정 중 알 수 없는 오류 발생: {e}")
+                asyncio.run_coroutine_threadsafe(
+                    send_bybit_failure_msg(original_symbol, reason=str(e)),
+                    asyncio.get_event_loop()
+                )
+                return
 
         # 1-4. 주문 실행
         order_result = bybit_client.place_order(
@@ -151,24 +230,55 @@ def execute_bybit_order(order_info, message_id):
                             print(MESSAGES['scaled_entry_price'].format(entry_price=order_info['entry_price']))
                         order_info['stop_loss'] *= factor
                         order_info['targets'] = [tp * factor for tp in order_info['targets']]
-                        
-                        # 레버리지 및 주문 수량 재계산
-                        position_info = bybit_client.get_positions(category="linear", symbol=symbol_to_check)
-                        current_leverage = int(position_info['result']['list'][0]['leverage']) if position_info['retCode'] == 0 and position_info['result']['list'] else 0
-                        if current_leverage != order_info['leverage']:
-                            bybit_client.set_leverage(
-                                category="linear",
-                                symbol=symbol_to_check,
-                                buyLeverage=str(order_info['leverage']),
-                                sellLeverage=str(order_info['leverage'])
-                            )
-                        
-                        if order_info['entry_price'] == 'NOW':
-                            ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol_to_check)
-                            current_price = float(ticker_info['result']['list'][0]['lastPrice'])
-                            order_qty = (trade_amount * order_info['leverage']) / current_price
-                        else:
-                            order_qty = (trade_amount * order_info['leverage']) / float(order_info['entry_price'])
+
+                        # 레버리지 설정 및 재계산 (수정된 로직 적용)
+                        try:
+                            position_info_scaled = bybit_client.get_positions(category="linear", symbol=symbol_to_check)
+                            current_leverage_scaled = float(position_info_scaled['result']['list'][0]['leverage']) if position_info_scaled['retCode'] == 0 and position_info_scaled['result']['list'] else 0
+                            
+                            if float(current_leverage_scaled) != float(order_info['leverage']):
+                                bybit_client.set_leverage(
+                                    category="linear",
+                                    symbol=symbol_to_check,
+                                    buyLeverage=str(order_info['leverage']),
+                                    sellLeverage=str(order_info['leverage'])
+                                )
+                            else:
+                                print(f"ℹ️ {symbol_to_check}의 레버리지가 이미 설정된 값과 동일합니다. 변경을 건너뜁니다.")
+                        except Exception as lev_e:
+                            lev_error_message = str(lev_e)
+                            if 'leverage invalid' in lev_error_message or 'leverage not modified' in lev_error_message:
+                                print(f"⚠️ {symbol_to_check} 레버리지 설정 오류 발생. 최대 레버리지를 확인합니다.")
+                                instrument_info_lev = bybit_client.get_instruments_info(category="linear", symbol=symbol_to_check)
+                                if instrument_info_lev['retCode'] == 0 and instrument_info_lev['result']['list']:
+                                    max_leverage = instrument_info_lev['result']['list'][0]['leverageFilter']['maxLeverage']
+                                    if float(order_info['leverage']) > float(max_leverage):
+                                        order_info['leverage'] = float(max_leverage)
+                                        print(MESSAGES['leverage_exceeded_warning'].format(
+                                            requested_leverage=int(order_info['leverage']),
+                                            max_leverage=max_leverage
+                                        ))
+                                    
+                                    # 레버리지를 재조정했더라도, 현재 포지션의 레버리지와 비교하여 불필요한 호출을 막음
+                                    position_info_after_adjust = bybit_client.get_positions(category="linear", symbol=symbol_to_check)
+                                    current_leverage_after_adjust = float(position_info_after_adjust['result']['list'][0]['leverage']) if position_info_after_adjust['retCode'] == 0 and position_info_after_adjust['result']['list'] else 0
+
+                                    if float(current_leverage_after_adjust) != float(order_info['leverage']):
+                                        bybit_client.set_leverage(
+                                            category="linear",
+                                            symbol=symbol_to_check,
+                                            buyLeverage=str(order_info['leverage']),
+                                            sellLeverage=str(order_info['leverage'])
+                                        )
+                                    else:
+                                        print("ℹ️ 레버리지 자동 조정 후 확인 결과, 이미 설정된 값과 동일합니다. 변경을 건너뜁니다.")
+
+                                else:
+                                    print("종목 정보를 가져오는 데 실패했습니다. 레버리지 자동 조정 불가.")
+                                    raise lev_e
+                            else:
+                                print(f"Bybit 레버리지 설정 중 알 수 없는 오류 발생: {lev_e}")
+                                raise lev_e
                         
                         lot_size_filter = instrument_info['result']['list'][0]['lotSizeFilter']
                         qty_step = float(lot_size_filter['qtyStep'])
@@ -220,6 +330,9 @@ def execute_bybit_order(order_info, message_id):
     # 3. 주문 성공 시 후속 로직 실행
     if order_result and order_result['retCode'] == 0:
         print(MESSAGES['order_accepted'])
+
+        # 주문 ID를 order_result에서 추출
+        bybit_order_id = order_result['result']['orderId']
         
         # 주문이 체결된 후 포지션 정보를 가져옵니다.
         time.sleep(1) # 포지션 업데이트 대기
@@ -229,13 +342,14 @@ def execute_bybit_order(order_info, message_id):
             position_side = position_data['side']
             position_idx = position_data['positionIdx']
             
-            # message_id를 사용하여 딕셔너리에 포지션 정보를 저장
+            # message_id를 사용하여 딕셔너리에 포지션 정보 및 orderId를 저장
             active_orders[message_id] = {
                 'symbol': order_info['symbol'],
                 'side': position_side,
                 'entry_price': order_info['entry_price'],
                 'targets': order_info['targets'],
-                'positionIdx': position_idx
+                'positionIdx': position_idx,
+                'orderId': bybit_order_id  # orderId 추가
             }
             
             # 텔레그램 요약 메시지 전송
@@ -298,7 +412,22 @@ async def update_stop_loss_to_entry(symbol, side, position_idx, entry_price):
     지정된 주문의 Stop Loss를 진입가로 수정합니다.
     """
     try:
-        new_sl = str(entry_price)
+        # Entry NOW 주문일 경우 현재 시장 가격을 SL로 설정
+        if entry_price == "NOW":
+            ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol)
+            if ticker_info['retCode'] == 0 and ticker_info['result']['list']:
+                current_price = float(ticker_info['result']['list'][0]['lastPrice'])
+                new_sl = str(current_price)
+                await bybit_bot.send_message(
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                    text=MESSAGES['sl_move_to_market_price'].format(price=new_sl)
+                )
+            else:
+                await send_bybit_failure_msg(symbol, "현재 가격 정보를 가져오는 데 실패했습니다.")
+                return
+        else:
+            new_sl = str(entry_price)
+
         amend_result = bybit_client.set_trading_stop(
             category="linear",
             symbol=symbol,

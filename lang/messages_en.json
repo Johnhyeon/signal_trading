@@ -108,5 +108,7 @@
   "report_title": "📊 **Portfolio Statistics Report** ({period})",
   "report_total_trades": "🔄 **Total Trades**: {total_trades}",
   "report_total_pnl": "💰 **Total P&L**: {total_pnl:.2f} USDT",
-  "report_win_rate": "🎯 **Win Rate**: {win_rate:.2f}%"
+  "report_win_rate": "🎯 **Win Rate**: {win_rate:.2f}%",
+  "leverage_exceeded_warning": "⚠️ Requested leverage ({requested_leverage}x) exceeds the maximum ({max_leverage}x) for this symbol. Automatically adjusting.",
+  "sl_move_to_market_price": "Since this was an Entry NOW order, SL is moved to the current market price ({price})."
 }
