@@ -94,6 +94,7 @@ python main.py
 
 ### or .bat 실행
 파일 내 프로젝트/가상환경 경로 설정 후 실행
+```
 @echo off
 rem D:\.. to your project root full path
 cd "D:\..\signal_trading
@@ -111,9 +112,10 @@ rem venv deactivate
 call deactivate
 
 pause
-
+```
 
 # ⚠️ 주의사항
 본 프로젝트는 교육 및 연구 목적으로 제작되었습니다.
 실제 거래에 사용할 경우, 반드시 테스트넷 환경에서 충분히 검증 후 사용하세요.
 암호화폐 거래는 높은 리스크가 있으므로, 모든 책임은 사용자 본인에게 있습니다.
+
