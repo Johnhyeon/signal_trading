@@ -4,4 +4,9 @@
 # session
 *.session
 
+*.pyc
+auto_trader.py
+tele_test.py
+test.py
+
 trading/
