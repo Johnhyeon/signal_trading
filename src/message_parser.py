@@ -115,3 +115,26 @@ def parse_cancel_message(message_text):
         return cancel_match.group(1).upper() + "USDT"
     
     return None
+
+def parse_dca_message(message_text):
+    """
+    DCA 메시지 텍스트를 파싱하여 DCA 지정가와 새로운 SL 값을 추출합니다.
+    예: "DCA Limit 213, Move SL = 216"
+    """
+    try:
+        # 'DCA Limit'과 'Move SL'에 대한 값들을 정규표현식으로 찾습니다.
+        dca_match = re.search(r'DCA\s+Limit\s*[:=]?\s*([\d\.]+)', message_text, re.IGNORECASE)
+        sl_match = re.search(r'Move\s*SL\s*[:=]?\s*([\d\.]+)', message_text, re.IGNORECASE)
+
+        if not dca_match or not sl_match:
+            print(MESSAGES['dca_parsing_failed'])
+            return None, None
+        
+        dca_price = float(dca_match.group(1))
+        new_sl = float(sl_match.group(1))
+
+        return dca_price, new_sl
+
+    except Exception as e:
+        print(MESSAGES['parsing_error'], e)
+        return None, None

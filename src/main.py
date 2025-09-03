@@ -5,10 +5,9 @@ import telegram
 # import os # dotenv를 사용하지 않으므로 제거
 
 from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST_CHANNEL_ID, TELE_BYBIT_LOG_CHAT_ID
-from message_parser import parse_telegram_message, parse_cancel_message
-# update_stop_loss_to_entry 함수를 import합니다.
+from message_parser import parse_telegram_message, parse_cancel_message, parse_dca_message
 from portfolio_manager import generate_report
-from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, send_bybit_failure_msg, send_bybit_cancel_msg, update_stop_loss_to_entry, update_stop_loss_to_tp1, update_stop_loss_to_tp2
+from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, send_bybit_failure_msg, send_bybit_cancel_msg, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2
 
 # 수정: utils.py에서 MESSAGES 변수 임포트
 from utils import MESSAGES
@@ -110,42 +109,59 @@ async def handle_edited_message(event):
         print(MESSAGES['order_edit_system_error'].format(error_msg=e))
         await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['order_edit_system_error'].format(error_msg=str(e)))
 
-# ✅ SL을 진입가로 변경하는 이벤트 핸들러 추가
-# `reply_to` 속성을 사용하여 메시지가 답장인지 확인합니다.
+# ✅ DCA 및 SL 수정 이벤트 핸들러 추가
 @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, func=lambda e: e.is_reply))
-async def handle_move_sl(event):
+async def handle_dca_and_sl_update(event):
     global active_orders
     message_text = event.message.message.lower().replace(" ", "")
     
-    # 'move sl = entry' 메시지인지 확인 (대소문자 무시)
+    # DCA 및 SL 메시지 파싱 시도
+    dca_price, new_sl = parse_dca_message(event.message.message)
+
+    if dca_price and new_sl:
+        original_msg_id = event.reply_to_msg_id
+        if original_msg_id in active_orders:
+            order_info = active_orders[original_msg_id]
+            print(MESSAGES['dca_sl_message_detected'].format(symbol=order_info['symbol']))
+            # SL 수정
+            await update_stop_loss_to_value(
+                order_info['symbol'],
+                order_info['side'],
+                order_info['positionIdx'],
+                new_sl
+            )
+            # DCA 주문 실행
+            place_dca_order(order_info, dca_price)
+        else:
+            await send_bybit_failure_msg("DCA/SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+        return
+
+    # 기존 SL 이동 로직 유지
     if 'movesl=entry' in message_text:
         original_msg_id = event.reply_to_msg_id
         if original_msg_id in active_orders:
             order_info = active_orders[original_msg_id]
-            # 수정된 부분: orderId 대신 positionIdx와 side 사용
-            await update_stop_loss_to_entry(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['entry_price'])
+            await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['entry_price'])
         else:
             await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
-
+    
     elif 'movesl=tp1' in message_text:
         original_msg_id = event.reply_to_msg_id
         if original_msg_id in active_orders:
             order_info = active_orders[original_msg_id]
             if len(order_info['targets']) >= 1:
-                # 수정된 부분: orderId 대신 positionIdx와 side 사용
-                await update_stop_loss_to_tp1(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][0])
+                await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][0])
             else:
                 await send_bybit_failure_msg("SL", MESSAGES['tp1_not_found'])
         else:
             await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
-
+    
     elif 'movesl=tp2' in message_text:
         original_msg_id = event.reply_to_msg_id
         if original_msg_id in active_orders:
             order_info = active_orders[original_msg_id]
             if len(order_info['targets']) >= 2:
-                # 수정된 부분: orderId 대신 positionIdx와 side 사용
-                await update_stop_loss_to_tp2(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][1])
+                await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][1])
             else:
                 await send_bybit_failure_msg("SL", MESSAGES['tp2_not_found'])
         else:
@@ -280,39 +296,56 @@ async def handle_edited_message(event):
         await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['order_edit_system_error'].format(error_msg=str(e)))
 
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID, func=lambda e: e.is_reply))
-async def handle_move_sl(event):
+async def handle_dca_and_sl_update(event):
     global active_orders
     message_text = event.message.message.lower().replace(" ", "")
-    
-    # 'move sl = entry' 메시지인지 확인 (대소문자 무시)
+
+    dca_price, new_sl = parse_dca_message(event.message.message)
+
+    if dca_price and new_sl:
+        original_msg_id = event.reply_to_msg_id
+        if original_msg_id in active_orders:
+            order_info = active_orders[original_msg_id]
+            print(MESSAGES['dca_sl_message_detected'].format(symbol=order_info['symbol']))
+            # SL 수정
+            await update_stop_loss_to_value(
+                order_info['symbol'],
+                order_info['side'],
+                order_info['positionIdx'],
+                new_sl
+            )
+            # DCA 주문 실행
+            place_dca_order(order_info, dca_price)
+        else:
+            await send_bybit_failure_msg("DCA/SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+        return
+
+    # 기존 SL 이동 로직 유지
     if 'movesl=entry' in message_text:
         original_msg_id = event.reply_to_msg_id
         if original_msg_id in active_orders:
             order_info = active_orders[original_msg_id]
-            # 수정된 부분: orderId 대신 positionIdx와 side 사용
-            await update_stop_loss_to_entry(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['entry_price'])
+            await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['entry_price'])
         else:
             await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
-
+    
     elif 'movesl=tp1' in message_text:
         original_msg_id = event.reply_to_msg_id
         if original_msg_id in active_orders:
             order_info = active_orders[original_msg_id]
             if len(order_info['targets']) >= 1:
-                # 수정된 부분: orderId 대신 positionIdx와 side 사용
-                await update_stop_loss_to_tp1(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][0])
+                await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][0])
             else:
                 await send_bybit_failure_msg("SL", MESSAGES['tp1_not_found'])
         else:
             await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
-
+    
     elif 'movesl=tp2' in message_text:
         original_msg_id = event.reply_to_msg_id
         if original_msg_id in active_orders:
             order_info = active_orders[original_msg_id]
             if len(order_info['targets']) >= 2:
-                # 수정된 부분: orderId 대신 positionIdx와 side 사용
-                await update_stop_loss_to_tp2(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][1])
+                await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][1])
             else:
                 await send_bybit_failure_msg("SL", MESSAGES['tp2_not_found'])
         else:

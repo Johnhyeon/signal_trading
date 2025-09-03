@@ -343,7 +343,7 @@ def execute_bybit_order(order_info, message_id):
                         
                         adjusted_qty_decimal = decimal.Decimal(adjusted_qty)
                         precision = len(str(qty_step).split('.')[1]) if '.' in str(qty_step) else 0
-                        quantized_qty = adjusted_qty_decimal.quantize(decimal.Decimal('0.' + '0'*precision))
+                        quantized_qty = adjusted_qty_decimal.quantize(decimal.Decimal('0.' + '0' * precision))
                         
                         # 재주문 실행
                         order_result = bybit_client.place_order(
@@ -400,14 +400,16 @@ def execute_bybit_order(order_info, message_id):
             position_side = position_data['side']
             position_idx = position_data['positionIdx']
             
-            # message_id를 사용하여 딕셔너리에 포지션 정보 및 orderId를 저장
+            # ✅ 수정: message_id를 사용하여 딕셔너리에 'fund_percentage'와 'leverage'를 포함하여 포지션 정보 및 orderId를 저장
             active_orders[message_id] = {
                 'symbol': order_info['symbol'],
                 'side': position_side,
                 'entry_price': order_info['entry_price'],
                 'targets': order_info['targets'],
                 'positionIdx': position_idx,
-                'orderId': bybit_order_id  # orderId 추가
+                'orderId': bybit_order_id,
+                'fund_percentage': order_info['fund_percentage'],
+                'leverage': order_info['leverage'] # leverage 추가
             }
             
             # 텔레그램 요약 메시지 전송
@@ -570,3 +572,87 @@ async def update_stop_loss_to_tp2(symbol, side, position_idx, tp2_price):
     except Exception as e:
         print(MESSAGES['sl_update_system_error'].format(error_msg=e))
         await send_bybit_failure_msg(symbol, MESSAGES['sl_update_system_error'].format(error_msg=str(e)))
+
+async def update_stop_loss_to_value(symbol, side, position_idx, new_sl_price):
+    """
+    지정된 주문의 Stop Loss를 특정 가격으로 수정합니다.
+    """
+    try:
+        amend_result = bybit_client.set_trading_stop(
+            category="linear",
+            symbol=symbol,
+            side=side,
+            positionIdx=position_idx,
+            stopLoss=str(new_sl_price)
+        )
+
+        if amend_result['retCode'] == 0:
+            print(MESSAGES['sl_update_success'].format(symbol=symbol, new_sl=new_sl_price))
+            await bybit_bot.send_message(
+                chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                text=MESSAGES['sl_update_complete'].format(symbol=symbol, new_sl=new_sl_price)
+            )
+        elif result['retCode'] == 34040:
+            # ErrCode 34040은 "not modified"를 의미하며, 이미 동일한 값으로 설정되어 있다는 뜻입니다.
+            print(f"ℹ️ SL 값이 이미 {new_sl_price}로 설정되어 있어 변경을 건너뜁니다. (ErrCode: 34040)")
+            await bybit_bot.send_message(
+                chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                text=f"ℹ️ **{symbol}** SL 값 변경 실패\n사유: `이미 설정된 값과 동일`"
+            )
+        else:
+            print(MESSAGES['sl_update_fail'].format(symbol=symbol, error_msg=amend_result['retMsg']))
+            await send_bybit_failure_msg(symbol, MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']))
+
+    except Exception as e:
+        print(MESSAGES['sl_update_system_error'].format(error_msg=e))
+        await send_bybit_failure_msg(symbol, MESSAGES['sl_update_system_error'].format(error_msg=str(e)))
+
+# DCA 주문을 실행하는 함수
+def place_dca_order(order_info, dca_price):
+    """
+    DCA (Dollar-Cost Averaging) 주문을 실행합니다.
+    """
+    try:
+        # ✅ 수정: 추가한 'dca_order_placed' 키 사용
+        print(MESSAGES['dca_order_placed'].format(symbol=order_info['symbol'], price=dca_price))
+    
+        # 재고 잔액 및 거래량 계산
+        wallet_balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
+        usdt_balance = next((item for item in wallet_balance['result']['list'][0]['coin'] if item['coin'] == 'USDT'), None)
+        total_usdt = float(usdt_balance['equity'])
+        trade_amount = total_usdt * order_info['fund_percentage']
+        
+        # 'leverage' 오류 해결
+        order_qty = (trade_amount * order_info['leverage']) / dca_price
+
+        # 정밀도 조정
+        instrument_info = bybit_client.get_instruments_info(category="linear", symbol=order_info['symbol'])
+        lot_size_filter = instrument_info['result']['list'][0]['lotSizeFilter']
+        qty_step = float(lot_size_filter['qtyStep'])
+        adjusted_qty = round(order_qty / qty_step) * qty_step
+        adjusted_qty_decimal = decimal.Decimal(adjusted_qty)
+        precision = len(str(qty_step).split('.')[1]) if '.' in str(qty_step) else 0
+        quantized_qty = adjusted_qty_decimal.quantize(decimal.Decimal('0.' + '0' * precision))
+
+        # DCA 주문 실행
+        bybit_client.place_order(
+            category="linear",
+            symbol=order_info['symbol'],
+            side=order_info['side'], # 동일한 방향
+            orderType="Limit",
+            qty=str(quantized_qty),
+            price=str(dca_price)
+        )
+        # ✅ 수정: 추가한 'dca_order_success' 키 사용
+        print(MESSAGES['dca_order_success'])
+
+    except Exception as e:
+        # ✅ 수정: 추가한 'dca_order_error' 키 사용
+        print(MESSAGES['dca_order_fail'].format(error_msg=e))
+        asyncio.run_coroutine_threadsafe(
+            bybit_bot.send_message(
+                chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                text=MESSAGES['dca_order_fail'].format(error_msg=e)
+            ),
+            asyncio.get_event_loop()
+        )
