@@ -116,5 +116,14 @@
   "trade_record_saved_success": "📊 [{symbol}] 거래 기록이 성공적으로 저장되었습니다.",
   "trade_record_fetch_fail": "❌ [{symbol}] 거래 기록을 가져오는 데 실패했습니다.",
   "trade_closed_pnl_message": "📊 **{symbol} 거래 종료**\n▪️ P&L: `{pnl:.2f}` USDT",
-  "position_monitor_error": "포지션 청산 모니터링 중 오류 발생: {error_msg}"
+  "position_monitor_error": "포지션 청산 모니터링 중 오류 발생: {error_msg}",
+  "dca_parsing_failed": "⚠️ DCA 및 SL 수정 정보를 찾을 수 없습니다. 파싱 실패.",
+  "dca_sl_message_detected": "✅ {symbol}에 대한 DCA 및 SL 수정 메시지 감지. 주문을 실행합니다.",
+  "dca_order_placed": "✅ {symbol}에 대한 DCA 지정가 주문({price})이 성공적으로 접수되었습니다.",
+  "dca_limit_order_placed": "📈 **DCA 주문 접수 완료**\n🚀 **Symbol:** ${symbol}\n🎯 **Entry:** {price}\n💰 **Qty:** {qty}",
+  "dca_order_fail": "❌ {symbol}에 대한 DCA 주문 실패: {reason}",
+  "dca_order_fail_reason": "DCA 주문 실패: {error_msg}",
+  "dca_order_system_error": "DCA 주문 중 시스템 오류 발생: {error_msg}",
+  "dca_order_success": "DCA 주문이 성공적으로 완료되었습니다."
+
 }

@@ -186,6 +186,11 @@ async def handle_cancel_reply(event):
 ##### 테스트용
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID))
 async def my_event_handler(event):
+    # ✅ 봇 자신이 보낸 메시지 무시
+    bot_info = await bybit_bot.get_me()
+    if event.sender_id == bot_info.id:
+        return
+
     message_text = event.message.message
     print(f"\n새로운 메시지 감지:\n{message_text}")
 
@@ -396,6 +401,13 @@ async def main():
             chat_id=TELE_BYBIT_LOG_CHAT_ID,
             text=MESSAGES['bot_start_message']
         )
+        
+        # ✅ 테스트 채널로 시작 메시지 전송
+        await bybit_bot.send_message(
+            chat_id=TEST_CHANNEL_ID,
+            text=MESSAGES['test_channel_info'] + "\n" + MESSAGES['bot_start_message']
+        )
+        
         # 텔레그램 채널 접근 권한 확인
         try:
             channel = await client.get_entity(TARGET_CHANNEL_ID)
