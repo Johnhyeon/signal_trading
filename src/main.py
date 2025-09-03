@@ -174,10 +174,20 @@ async def my_event_handler(event):
     print(f"\n새로운 메시지 감지:\n{message_text}")
 
     # ✅ 'PF' 메시지 감지 및 포트폴리오 리포트 전송
-    if message_text.strip().upper() == 'PF':
-        report = generate_report()
+    message_parts = message_text.strip().lower().split()
+    if message_parts[0] == 'pf':
+        period = 'all'
+        if len(message_parts) > 1:
+            if message_parts[1] == 'monty':
+                period = 'month'
+            elif message_parts[1] == 'week':
+                period = 'week'
+            elif message_parts[1] == 'day':
+                period = 'day'
+        
+        report = generate_report(period=period)
         await bybit_bot.send_message(
-            chat_id=TELE_BYBIT_LOG_CHAT_ID,
+            chat_id=TEST_CHANNEL_ID,
             text=report,
             parse_mode='Markdown'
         )

@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from utils import MESSAGES
 
 # 거래 기록을 저장할 파일 경로
@@ -24,6 +24,14 @@ def record_trade_result(trade_data):
 
     # 새로운 거래 기록 추가
     logs.append(trade_data)
+
+    # ✅ 추가: 콘솔에 이번 거래 로그 출력
+    print("\n" + "="*30)
+    print("✅ 이번 거래 로그가 콘솔에 저장되었습니다.")
+    print(f"▪️ Symbol: {trade_data['symbol']}")
+    print(f"▪️ P&L: {trade_data['pnl']:.2f}")
+    print(f"▪️ Exit Price: {trade_data['exit_price']}")
+    print("="*30 + "\n")
     
     # 업데이트된 로그 파일 저장
     with open(TRADE_LOG_FILE, 'w', encoding='utf-8') as f:
@@ -42,12 +50,20 @@ def generate_report(period='all'):
     except (FileNotFoundError, json.JSONDecodeError):
         return MESSAGES['no_trade_log']
 
-    # 기간 필터링 (현재는 전체 기간만 지원)
+    # 기간 필터링 로직
     if period == 'all':
         filtered_logs = logs
     else:
-        # 향후 기능 확장을 위한 로직
-        filtered_logs = logs
+        now = datetime.now()
+        filtered_logs = []
+        for log in logs:
+            trade_date = datetime.fromisoformat(log['created_at'])
+            if period == 'day' and (now - trade_date) < timedelta(days=1):
+                filtered_logs.append(log)
+            elif period == 'week' and (now - trade_date) < timedelta(weeks=1):
+                filtered_logs.append(log)
+            elif period == 'month' and (now - trade_date) < timedelta(days=30):
+                filtered_logs.append(log)
 
     if not filtered_logs:
         return MESSAGES['no_trades_in_period']
@@ -63,6 +79,12 @@ def generate_report(period='all'):
         f"{MESSAGES['report_total_pnl'].format(total_pnl=total_pnl)}\n"
         f"{MESSAGES['report_win_rate'].format(win_rate=win_rate)}\n"
     )
+
+    # ✅ 추가: 콘솔에 리포트 내용 출력
+    print("\n" + "="*30)
+    print("📊 포트폴리오 리포트가 콘솔에 출력되었습니다.")
+    print(report_message)
+    print("="*30 + "\n")
     
     return report_message
 
