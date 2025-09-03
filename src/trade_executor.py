@@ -165,23 +165,6 @@ def execute_bybit_order(order_info, message_id):
         else:
             order_qty = (trade_amount * order_info['leverage']) / float(order_info['entry_price'])
 
-        # 1-1. 계좌 잔고 조회 및 주문 수량 계산 (로직 유지)
-        wallet_balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
-        usdt_balance = next((item for item in wallet_balance['result']['list'][0]['coin'] if item['coin'] == 'USDT'), None)
-        if not usdt_balance:
-            print(MESSAGES['usdt_balance_not_found'])
-            return
-
-        total_usdt = float(usdt_balance['equity'])
-        trade_amount = total_usdt * order_info['fund_percentage']
-
-        if order_info['entry_price'] == 'NOW':
-            ticker_info = bybit_client.get_tickers(category="linear", symbol=original_symbol)
-            current_price = float(ticker_info['result']['list'][0]['lastPrice'])
-            order_qty = (trade_amount * order_info['leverage']) / current_price
-        else:
-            order_qty = (trade_amount * order_info['leverage']) / float(order_info['entry_price'])
-
         # 1-2. 종목 정보 조회 및 주문 수량 정밀도 조정 (로직 유지)
         instrument_info = bybit_client.get_instruments_info(category="linear", symbol=original_symbol)
         lot_size_filter = instrument_info['result']['list'][0]['lotSizeFilter']
@@ -339,9 +322,25 @@ def execute_bybit_order(order_info, message_id):
                                 print(f"Bybit 레버리지 설정 중 알 수 없는 오류 발생: {lev_e}")
                                 raise lev_e
                         
+                        # 주문 수량 재계산
+                        if order_info['entry_price'] == 'NOW':
+                            ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol_to_check)
+                            current_price = float(ticker_info['result']['list'][0]['lastPrice'])
+                            order_qty = (trade_amount * order_info['leverage']) / current_price
+                        else:
+                            # 스케일링된 가격과 레버리지로 주문 수량 다시 계산
+                            order_qty = (trade_amount * order_info['leverage']) / float(order_info['entry_price'])
+                        
                         lot_size_filter = instrument_info['result']['list'][0]['lotSizeFilter']
                         qty_step = float(lot_size_filter['qtyStep'])
-                        adjusted_qty = round(order_qty / qty_step) * qty_step
+                        max_qty = float(lot_size_filter['maxOrderQty'])
+                        
+                        if order_qty > max_qty:
+                            print(MESSAGES['qty_exceeded_warning'].format(calculated_qty=order_qty, max_qty=max_qty))
+                            adjusted_qty = max_qty
+                        else:
+                            adjusted_qty = round(order_qty / qty_step) * qty_step
+                        
                         adjusted_qty_decimal = decimal.Decimal(adjusted_qty)
                         precision = len(str(qty_step).split('.')[1]) if '.' in str(qty_step) else 0
                         quantized_qty = adjusted_qty_decimal.quantize(decimal.Decimal('0.' + '0'*precision))
