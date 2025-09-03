@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime
+import os
 from telethon import events
 import telegram
 # import os # dotenv를 사용하지 않으므로 제거
@@ -380,6 +381,10 @@ async def handle_cancel_reply(event):
 async def main():
     await client.start()
     print("Connect start...")
+    if os.getenv('LANG_CODE') == 'ko':
+        print("🌏 Now Selected language: KO")
+    elif os.getenv('LANG_CODE') == 'en':
+        print("🌎 Now Selected language: EN")
     print(MESSAGES['application_run_message'])
     print(MESSAGES['instance_created_message'])
 
