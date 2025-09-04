@@ -402,62 +402,67 @@ async def main():
         print("="*50 + "\n")
         return # 프로그램 종료
     
-    await client.start()
-    print("Connect start...")
-    if os.getenv('LANG_CODE') == 'ko':
-        print("🌏 Now Selected language: KO")
-    elif os.getenv('LANG_CODE') == 'en':
-        print("🌎 Now Selected language: EN")
-    print(MESSAGES['application_run_message'])
-    print(MESSAGES['instance_created_message'])
-
-    # --- 연결 상태 확인 로직 추가 ---
-    try:
-        # Bybit 연결 상태 확인
-        balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
-        if balance['retCode'] == 0:
-            print(MESSAGES['bybit_api_connection_success'])
-        else:
-            print(MESSAGES['bybit_api_connection_failure'].format(error_msg=balance['retMsg']))
-
-        # 텔레그램 봇 연결 상태 확인 (봇 정보 가져오기)
-        bot_info = await bybit_bot.get_me()
-        print(MESSAGES['telegram_bot_connection_success'].format(username=bot_info.username))
-        
-        # 시작 메시지를 로그 채널로 전송
-        await bybit_bot.send_message(
-            chat_id=TELE_BYBIT_LOG_CHAT_ID,
-            text=MESSAGES['bot_start_message']
-        )
-        
-        # ✅ 테스트 채널로 시작 메시지 전송
-        await bybit_bot.send_message(
-            chat_id=TEST_CHANNEL_ID,
-            text=MESSAGES['test_channel_info'] + "\n" + MESSAGES['bot_start_message']
-        )
-        
-        # 텔레그램 채널 접근 권한 확인
+    while True:
         try:
-            channel = await client.get_entity(TARGET_CHANNEL_ID)
-            test_channel = await client.get_entity(TEST_CHANNEL_ID)
-            print(MESSAGES['telegram_channel_access_success'].format(channel_name=channel.title))
-            print(MESSAGES['telegram_channel_access_success'].format(channel_name=test_channel.title))
+            await client.start()
+            print("Connect start...")
+            if os.getenv('LANG_CODE') == 'ko':
+                print("🌏 Now Selected language: KO")
+            elif os.getenv('LANG_CODE') == 'en':
+                print("🌎 Now Selected language: EN")
+            print(MESSAGES['application_run_message'])
+            print(MESSAGES['instance_created_message'])
+
+            # --- 연결 상태 확인 로직 추가 ---
+            try:
+                # Bybit 연결 상태 확인
+                balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
+                if balance['retCode'] == 0:
+                    print(MESSAGES['bybit_api_connection_success'])
+                else:
+                    print(MESSAGES['bybit_api_connection_failure'].format(error_msg=balance['retMsg']))
+
+                # 텔레그램 봇 연결 상태 확인 (봇 정보 가져오기)
+                bot_info = await bybit_bot.get_me()
+                print(MESSAGES['telegram_bot_connection_success'].format(username=bot_info.username))
+                
+                # 시작 메시지를 로그 채널로 전송
+                await bybit_bot.send_message(
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                    text=MESSAGES['bot_start_message']
+                )
+                
+                # ✅ 테스트 채널로 시작 메시지 전송
+                await bybit_bot.send_message(
+                    chat_id=TEST_CHANNEL_ID,
+                    text=MESSAGES['test_channel_info'] + "\n" + MESSAGES['bot_start_message']
+                )
+                
+                # 텔레그램 채널 접근 권한 확인
+                try:
+                    channel = await client.get_entity(TARGET_CHANNEL_ID)
+                    test_channel = await client.get_entity(TEST_CHANNEL_ID)
+                    print(MESSAGES['telegram_channel_access_success'].format(channel_name=channel.title))
+                    print(MESSAGES['telegram_channel_access_success'].format(channel_name=test_channel.title))
+                except Exception as e:
+                    print(MESSAGES['telegram_channel_access_failure'].format(error_msg=e))
+
+            except Exception as e:
+                print(MESSAGES['initial_connection_error'].format(error_msg=e))
+                # 오류 메시지를 로그 채널로 전송
+                await bybit_bot.send_message(
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                    text=MESSAGES['bot_failure_message'].format(error_msg=e)
+                )
+            # --- 연결 상태 확인 로직 추가 끝 ---
+            
+            print(MESSAGES['listening_message'])
+            now = datetime.now()
+            print(MESSAGES['program_start'], "time:", now.date(), now.time())
+            await client.run_until_disconnected()
         except Exception as e:
-            print(MESSAGES['telegram_channel_access_failure'].format(error_msg=e))
+            print(f"⚠️ 연결 오류 발생: {e}. 30초 후 재연결을 시도합니다.")
+            await asyncio.sleep(30)
 
-    except Exception as e:
-        print(MESSAGES['initial_connection_error'].format(error_msg=e))
-        # 오류 메시지를 로그 채널로 전송
-        await bybit_bot.send_message(
-            chat_id=TELE_BYBIT_LOG_CHAT_ID,
-            text=MESSAGES['bot_failure_message'].format(error_msg=e)
-        )
-    # --- 연결 상태 확인 로직 추가 끝 ---
-    
-    print(MESSAGES['listening_message'])
-    now = datetime.now()
-    print(MESSAGES['program_start'], "time:", now.date(), now.time())
-    await client.run_until_disconnected()
-
-with client:
-    client.loop.run_until_complete(main())
+    with client:
+        client.loop.run_until_complete(main())
