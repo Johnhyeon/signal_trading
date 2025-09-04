@@ -379,6 +379,29 @@ async def handle_cancel_reply(event):
 # 메인 함수 (스크립트 실행)
 # -----------------
 async def main():
+    # .env 파일 경로 설정
+    dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
+
+    # .env 파일이 없으면 생성
+    if not os.path.exists(dotenv_path):
+        with open(dotenv_path, 'w') as f:
+            f.write("# 환경 설정\n")
+            f.write("TELEGRAM_API_ID=\n")
+            f.write("TELEGRAM_API_HASH=''\n")
+            f.write("BYBIT_API_KEY=''\n")
+            f.write("BYBIT_SECRET_KEY=''\n")
+            f.write("TARGET_CHANNEL_ID=\n")
+            f.write("TELE_BYBIT_BOT_TOKEN=\n")
+            f.write("TELE_BYBIT_LOG_CHAT_ID=\n")
+            f.write("TEST_CHANNEL_ID=\n")
+            f.write("LANG_CODE='ko' # 'ko' or 'en'\n")
+        
+        print("\n" + "="*50)
+        print("⚠️ .env 파일이 존재하지 않아 자동으로 생성했습니다. ⚠️")
+        print("⚠️ 생성된 .env 파일을 열고, 필수 API 키를 입력한 후 다시 실행해주세요. ⚠️")
+        print("="*50 + "\n")
+        return # 프로그램 종료
+    
     await client.start()
     print("Connect start...")
     if os.getenv('LANG_CODE') == 'ko':
