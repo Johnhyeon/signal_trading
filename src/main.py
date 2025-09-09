@@ -38,16 +38,15 @@ async def my_event_handler(event):
     order_info = parse_telegram_message(message_text)
     
     if order_info:
-        # ✅ 중복 주문 방지 필터링 조건 추가
-        # active_orders 딕셔너리에서 현재 종목이 이미 주문되었는지 확인합니다.
-        existing_symbol = next((v['symbol'] for v in active_orders.values() if v['symbol'] == order_info['symbol']), None)
+        # ✅ 수정: 중복 주문 방지 필터링 조건 강화 (종목명 + 포지션 방향)
+        existing_order = next((v for v in active_orders.values() if v['symbol'] == order_info['symbol'] and v['side'] == order_info['side']), None)
 
-        if existing_symbol:
+        if existing_order:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))
             # 사용자에게 알림 메시지를 보내는 것도 좋은 방법입니다.
             await send_bybit_failure_msg(order_info['symbol'], MESSAGES['duplicate_order_reason'])
             return
-
+        
         # 메시지 ID를 인수로 전달
         execute_bybit_order(order_info, event.id)
 

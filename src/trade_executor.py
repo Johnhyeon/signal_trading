@@ -61,9 +61,9 @@ async def send_bybit_failure_msg(symbol, reason):
         parse_mode='Markdown'
     )
 
-async def record_trade_result_on_close(symbol):
+async def record_trade_result_on_close(symbol, message_id):
     """
-    포지션이 청산될 때까지 모니터링하고, 청산되면 거래 결과를 기록합니다.
+    포지션이 청산될 때까지 모니터링하고, 청산되면 거래 결과를 기록하고 active_orders에서 제거합니다.
     """
     print(MESSAGES['monitor_position_close'].format(symbol=symbol))
     
@@ -104,6 +104,11 @@ async def record_trade_result_on_close(symbol):
                         # 새로운 파일에 기록
                         record_trade_result(trade_result)
                         
+                        # ✅ 추가: active_orders에서 해당 주문 제거
+                        if message_id in active_orders:
+                            del active_orders[message_id]
+                            print(f"✅ 포지션 청산 완료 후, active_orders에서 {symbol} 주문을 제거했습니다.")
+                            
                         print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
                         await bybit_bot.send_message(
                             chat_id=TELE_BYBIT_LOG_CHAT_ID,
@@ -418,9 +423,9 @@ def execute_bybit_order(order_info, message_id):
                 asyncio.get_event_loop()
             )
 
-            # ✅ 포지션 청산 모니터링 시작
+            # ✅ 포지션 청산 모니터링 시작 (message_id 전달)
             asyncio.run_coroutine_threadsafe(
-                record_trade_result_on_close(order_info['symbol']),
+                record_trade_result_on_close(order_info['symbol'], message_id),
                 asyncio.get_event_loop()
             )
             
