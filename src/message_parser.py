@@ -54,7 +54,7 @@ def parse_telegram_message(message_text):
         symbol_match = re.search(r'\$([A-Z0-9]+)', message_text)
         leverage_match = re.search(r'Leverage:\s*x(\d+)', message_text)
         fund_match = re.search(r'Fund:\s*(\d+)%', message_text)
-        entry_match = re.search(r'Entry:\s*(NOW|[\d]+xx|[\d]+x|\d+(?:\.\d+)?x|\d+(?:\.\d+)?)', message_text)
+        entry_match = re.search(r'Entry:\s*(NOW|(\d+(?:\.\d{1,3})?)(?:[xX]{1,2}|\.[xX]{1,2})?)', message_text)
         tp_matches = re.findall(r'TP\d+:\s*([\d\.]+)', message_text)
         
         if not all([symbol_match, leverage_match, fund_match, entry_match, sl_match_final, tp_matches]):
