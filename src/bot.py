@@ -1,0 +1,373 @@
+import asyncio
+from datetime import datetime
+import json
+import os
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+
+from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
+from portfolio_manager import generate_report
+from trade_executor import send_bybit_failure_msg
+
+from utils import MESSAGES
+
+# ✅ 봇 명령어 처리 함수들
+async def open_orders_command(update: Update, context):
+    try:
+        print("API 호출: bybit_client.get_open_orders(category='linear', settleCoin='USDT')")
+        orders_info = bybit_client.get_open_orders(category="linear", settleCoin="USDT")
+        print(f"API 응답: {orders_info}")
+
+        if orders_info['retCode'] == 0 and orders_info['result']['list']:
+            filtered_orders = [
+                order for order in orders_info['result']['list']
+                if order.get('orderType') in ['Limit']
+            ]
+            
+            if filtered_orders:
+                message_text = MESSAGES['open_orders_title'] + "\n\n"
+                for order in filtered_orders:
+                    symbol = order['symbol']
+                    # ✅ 수정: 현재가 추가
+                    ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol)
+                    current_price = "정보 없음"
+                    if ticker_info['retCode'] == 0 and ticker_info['result']['list']:
+                        current_price = ticker_info['result']['list'][0]['lastPrice']
+
+                    message_text += (
+                        f"**{MESSAGES['symbol']}:** {symbol} | **{MESSAGES['side']}:** {order['side']}\n"
+                        f"**{MESSAGES['qty']}:** {order['qty']} | **{MESSAGES['price']}:** {order['price']} | **{MESSAGES['current_price']}:** {current_price}\n\n"
+                    )
+            else:
+                message_text = MESSAGES['no_open_orders']
+        else:
+            message_text = MESSAGES['no_open_orders']
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+
+async def positions_command(update: Update, context):
+    try:
+        print("API 호출: bybit_client.get_positions(category='linear', settleCoin='USDT')")
+        positions_info = bybit_client.get_positions(category="linear", settleCoin="USDT")
+        print(f"API 응답: {positions_info}")
+        
+        if positions_info['retCode'] == 0 and positions_info['result']['list']:
+            message_text = MESSAGES['positions_title'] + "\n\n"
+            found_position = False
+            total_unrealized_pnl = 0.0 # ✅ 추가: 총 미실현 손익을 계산할 변수 초기화
+            for position in positions_info['result']['list']:
+                if float(position['size']) > 0:
+                    found_position = True
+                    symbol = position['symbol']
+                    ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol)
+                    current_price = "정보 없음"
+                    if ticker_info['retCode'] == 0 and ticker_info['result']['list']:
+                        current_price = ticker_info['result']['list'][0]['lastPrice']
+
+                    # ✅ 수정: API 응답의 'unrealisedPnl' 키를 사용하고 float으로 변환
+                    pnl_value_str = position.get('unrealisedPnl', '0')
+                    try:
+                        pnl_value = float(pnl_value_str)
+                        total_unrealized_pnl += pnl_value
+                    except (ValueError, TypeError):
+                        pnl_value = 0.0
+                    
+                    message_text += (
+                        f"**{MESSAGES['symbol']}:** {symbol} | **{MESSAGES['side']}:** {position['side']}\n"
+                        f"**{MESSAGES['qty']}:** {position['size']} | **{MESSAGES['entry_price']}:** {position['avgPrice']}\n"
+                        f"**{MESSAGES['current_price']}:** {current_price}\n"
+                        f"**{MESSAGES['unrealized_pnl']}:** {pnl_value}\n\n"
+                    )
+            
+            if found_position:
+                message_text += f"**{MESSAGES['total_unrealized_pnl']}:** `{total_unrealized_pnl:.2f}` USDT\n" # ✅ 추가
+            else:
+                message_text = MESSAGES['no_positions']
+
+        else:
+            message_text = MESSAGES['no_positions']
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+
+async def price_command(update: Update, context):
+    try:
+        if not context.args:
+            await bybit_bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ 사용법: /price [심볼명] (예: /price BTC)"
+            )
+            return
+
+        symbol = context.args[0].upper() + "USDT"
+        ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol)
+        
+        if ticker_info['retCode'] == 0 and ticker_info['result']['list']:
+            data = ticker_info['result']['list'][0]
+            price = data['lastPrice']
+            change = float(data['price24hPcnt']) * 100
+            
+            message_text = (
+                f"📈 **{symbol} 실시간 시세**\n"
+                f"▪️ **가격:** `{price}` USDT\n"
+                f"▪️ **24시간 등락폭:** `{change:.2f}%`"
+            )
+        else:
+            message_text = f"⚠️ 종목 '{symbol}'의 정보를 찾을 수 없습니다."
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+
+async def pf_command(update: Update, context):
+    try:
+        message_parts = context.args
+        period = 'all'
+        if message_parts:
+            if message_parts[0] == 'week':
+                period = 'week'
+            elif message_parts[0] == 'day':
+                period = 'day'
+        
+        report = generate_report(period=period)
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=report,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+
+async def balance_command(update: Update, context):
+    try:
+        balance_info = bybit_client.get_wallet_balance(accountType="UNIFIED")
+        
+        if balance_info['retCode'] == 0:
+            usdt_balance_data = next((item for item in balance_info['result']['list'][0]['coin'] if item['coin'] == 'USDT'), None)
+            
+            if usdt_balance_data:
+                # ✅ 수정: 빈 문자열을 0.0으로 처리
+                total_balance = float(usdt_balance_data.get('walletBalance') or 0.0)
+                available_balance = float(usdt_balance_data.get('availableToWithdraw') or 0.0)
+                
+                message_text = (
+                    f"{MESSAGES['balance_title']}\n\n"
+                    f"▪️ **{MESSAGES['total_balance']}:** `{total_balance:.2f}` USDT\n"
+                    f"▪️ **{MESSAGES['available_balance']}:** `{available_balance:.2f}` USDT"
+                )
+            else:
+                message_text = MESSAGES['usdt_balance_not_found']
+        else:
+            message_text = f"⚠️ 잔고 정보를 가져오는 데 실패했습니다: {balance_info['retMsg']}"
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+# ✅ 추가: 모든 미체결 주문 취소
+async def cancel_all_command(update: Update, context):
+    try:
+        print("API 호출: bybit_client.cancel_all_orders(category='linear', settleCoin='USDT')")
+        cancel_info = bybit_client.cancel_all_orders(category='linear', settleCoin='USDT')
+        print(f"API 응답: {cancel_info}")
+        
+        if cancel_info['retCode'] == 0:
+            message_text = MESSAGES['cancel_all_success_bot']
+        else:
+            message_text = f"{MESSAGES['cancel_all_fail']}: {cancel_info.get('retMsg', '알 수 없는 오류')}"
+        
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+
+# ✅ 추가: 거래 기록 조회
+async def history_command(update: Update, context):
+    try:
+        # ✅ 수정: 명령어 인자로 받은 숫자를 limit으로 설정, 기본값은 5
+        limit = 5
+        if context.args:
+            try:
+                limit = int(context.args[0])
+            except (ValueError, IndexError):
+                await bybit_bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=MESSAGES['invalid_history_limit_usage']
+                )
+                return
+
+        # ✅ 수정: 파일 경로를 올바르게 지정
+        log_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'log', 'trade_log.json')
+        print(f"디버깅: history_command가 로그 파일을 찾는 경로 -> {log_file_path}")
+        
+        with open(log_file_path, 'r', encoding='utf-8') as f:
+            trade_history = json.load(f)
+
+        if not trade_history:
+            message_text = MESSAGES['no_trade_history']
+        else:
+            message_text = MESSAGES['history_title'] + "\n\n"
+            recent_trades = trade_history[-limit:]
+            
+            for trade in recent_trades:
+                symbol = trade.get('symbol', 'N/A')
+                side = trade.get('side', 'N/A')
+                pnl = trade.get('pnl', '0')
+                created_at = trade.get('created_at', 'N/A').split('T')[0]
+                
+                message_text += (
+                    f"**{MESSAGES['symbol']}:** {symbol} | **{MESSAGES['side']}:** {side}\n"
+                    f"**{MESSAGES['unrealized_pnl']}:** {float(pnl):.2f} USDT | **{MESSAGES['date']}:** {created_at}\n\n"
+                )
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except FileNotFoundError:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=MESSAGES['no_trade_history']
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+
+# ✅ 추가: 봇 상태 확인
+async def health_command(update: Update, context):
+    try:
+        # Bybit API 연결 상태 확인
+        health_check = bybit_client.get_wallet_balance(accountType="UNIFIED")
+        
+        if health_check['retCode'] == 0:
+            status_text = MESSAGES['health_status_ok']
+        else:
+            status_text = f"{MESSAGES['health_status_fail']}: {health_check.get('retMsg', '알 수 없는 오류')}"
+            
+        message_text = (
+            f"**{MESSAGES['health_title']}**\n"
+            f"▪️ **{MESSAGES['bybit_api']}:** {status_text}\n"
+            f"▪️ **{MESSAGES['telegram_bot']}:** {MESSAGES['health_status_ok']}\n"
+        )
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=f"오류 발생: {e}"
+        )
+        
+async def menu_command(update: Update, context):
+    keyboard = [
+        [
+            InlineKeyboardButton(MESSAGES['menu_open_orders'], callback_data="open_orders"),
+            InlineKeyboardButton(MESSAGES['menu_positions'], callback_data="positions")
+        ],
+        [
+            InlineKeyboardButton(MESSAGES['menu_balance'], callback_data="balance"),
+            InlineKeyboardButton(MESSAGES['menu_pf'], callback_data="pf")
+        ],
+        [
+            InlineKeyboardButton(MESSAGES['menu_history'], callback_data="history"),
+            InlineKeyboardButton(MESSAGES['menu_health'], callback_data="health")
+        ],
+        [
+            InlineKeyboardButton(MESSAGES['menu_cancel_all'], callback_data="cancel_all")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await bybit_bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=MESSAGES['menu_title'],
+        reply_markup=reply_markup
+    )
+
+async def button_callback_handler(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+
+    callback_data = query.data
+    
+    # 콜백 데이터에 따라 해당 명령어 함수를 호출
+    if callback_data == "open_orders":
+        await open_orders_command(update, context)
+    elif callback_data == "positions":
+        await positions_command(update, context)
+    elif callback_data == "balance":
+        await balance_command(update, context)
+    elif callback_data == "pf":
+        await pf_command(update, context)
+    elif callback_data == "history":
+        await history_command(update, context)
+    elif callback_data == "health":
+        await health_command(update, context)
+    elif callback_data == "cancel_all":
+        await cancel_all_command(update, context)
+
+def main():
+    application = Application.builder().token(TELE_BYBIT_BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("open_orders", open_orders_command))
+    application.add_handler(CommandHandler("positions", positions_command))
+    application.add_handler(CommandHandler("price", price_command))
+    application.add_handler(CommandHandler("pf", pf_command))
+    application.add_handler(CommandHandler("balance", balance_command))
+    application.add_handler(CommandHandler("cancel_all", cancel_all_command)) # ✅ 추가
+    application.add_handler(CommandHandler("history", history_command))       # ✅ 추가
+    application.add_handler(CommandHandler("health", health_command))         # ✅ 추가
+    application.add_handler(CommandHandler("menu", menu_command)) # ✅ 추가
+    application.add_handler(CallbackQueryHandler(button_callback_handler)) # ✅ 추가
+    
+    
+    print("Telegram bot started...")
+    application.run_polling(poll_interval=1)
+
+if __name__ == "__main__":
+    main()

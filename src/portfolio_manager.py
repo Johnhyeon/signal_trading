@@ -44,6 +44,12 @@ def generate_report(period='all'):
     거래 기록을 기반으로 통계 리포트를 생성합니다.
     period: 'all' (전체), 'daily', 'weekly' 등
     """
+    # ✅ 수정: 로그 파일이 없으면 빈 파일로 초기화하는 로직 추가
+    os.makedirs(LOG_DIR, exist_ok=True)
+    if not os.path.exists(TRADE_LOG_FILE):
+        with open(TRADE_LOG_FILE, 'w', encoding='utf-8') as f:
+            f.write('[]')
+
     try:
         with open(TRADE_LOG_FILE, 'r', encoding='utf-8') as f:
             logs = json.load(f)
@@ -57,13 +63,20 @@ def generate_report(period='all'):
         now = datetime.now()
         filtered_logs = []
         for log in logs:
-            trade_date = datetime.fromisoformat(log['created_at'])
-            if period == 'day' and (now - trade_date) < timedelta(days=1):
-                filtered_logs.append(log)
-            elif period == 'week' and (now - trade_date) < timedelta(weeks=1):
-                filtered_logs.append(log)
-            elif period == 'month' and (now - trade_date) < timedelta(days=30):
-                filtered_logs.append(log)
+            # ✅ 수정: created_at 키가 없거나 형식이 잘못된 경우 건너뛰는 예외 처리 추가
+            created_at = log.get('created_at')
+            if not created_at:
+                continue
+
+            try:
+                trade_date = datetime.fromisoformat(created_at)
+                if period == 'day' and (now - trade_date) < timedelta(days=1):
+                    filtered_logs.append(log)
+                elif period == 'week' and (now - trade_date) < timedelta(weeks=1):
+                    filtered_logs.append(log)
+            except ValueError:
+                # fromisoformat 변환 오류가 발생하면 로그 건너뛰기
+                continue
 
     if not filtered_logs:
         return MESSAGES['no_trades_in_period']
