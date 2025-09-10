@@ -208,7 +208,7 @@ async def cancel_all_command(update: Update, context):
             # 'Limit' 또는 'Market' 주문만 필터링합니다.
             orders_to_cancel = [
                 order for order in orders_info['result']['list']
-                if order.get('orderType') in ['Limit', 'Market']
+                if order.get('orderType') in ['Limit']
             ]
             
             if orders_to_cancel:
