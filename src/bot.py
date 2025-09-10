@@ -36,7 +36,7 @@ async def open_orders_command(update: Update, context):
 
                     message_text += (
                         f"**{MESSAGES['symbol']}:** {symbol} | **{MESSAGES['side']}:** {order['side']}\n"
-                        f"**{MESSAGES['qty']}:** {order['qty']} | **{MESSAGES['price']}:** {order['price']} | **{MESSAGES['current_price']}:** {current_price}\n\n"
+                        f"**{MESSAGES['qty']}:** {order['qty']} | **{MESSAGES['price']}:** {order['price']} | **{MESSAGES['current_price']}:** {current_price}\n"
                     )
             else:
                 message_text = MESSAGES['no_open_orders']
@@ -197,17 +197,36 @@ async def balance_command(update: Update, context):
             chat_id=update.effective_chat.id,
             text=f"오류 발생: {e}"
         )
-# ✅ 추가: 모든 미체결 주문 취소
+        
 async def cancel_all_command(update: Update, context):
     try:
-        print("API 호출: bybit_client.cancel_all_orders(category='linear', settleCoin='USDT')")
-        cancel_info = bybit_client.cancel_all_orders(category='linear', settleCoin='USDT')
-        print(f"API 응답: {cancel_info}")
-        
-        if cancel_info['retCode'] == 0:
-            message_text = MESSAGES['cancel_all_success_bot']
+        print("API 호출: bybit_client.get_open_orders(category='linear', settleCoin='USDT')")
+        orders_info = bybit_client.get_open_orders(category='linear', settleCoin='USDT')
+        print(f"API 응답: {orders_info}")
+
+        if orders_info['retCode'] == 0 and orders_info['result']['list']:
+            # 'Limit' 또는 'Market' 주문만 필터링합니다.
+            orders_to_cancel = [
+                order for order in orders_info['result']['list']
+                if order.get('orderType') in ['Limit', 'Market']
+            ]
+            
+            if orders_to_cancel:
+                for order in orders_to_cancel:
+                    try:
+                        bybit_client.cancel_order(
+                            category='linear',
+                            symbol=order['symbol'],
+                            orderId=order['orderId']
+                        )
+                        print(f"✅ 주문 취소 완료: {order['orderId']}")
+                    except Exception as e:
+                        print(f"⚠️ 주문 취소 실패: {order['orderId']}, 오류: {e}")
+                message_text = MESSAGES['cancel_all_success']
+            else:
+                message_text = MESSAGES['no_open_order_to_cancel']
         else:
-            message_text = f"{MESSAGES['cancel_all_fail']}: {cancel_info.get('retMsg', '알 수 없는 오류')}"
+            message_text = f"{MESSAGES['cancel_all_fail']}: {orders_info.get('retMsg', '알 수 없는 오류')}"
         
         await bybit_bot.send_message(
             chat_id=update.effective_chat.id,
@@ -220,10 +239,8 @@ async def cancel_all_command(update: Update, context):
             text=f"오류 발생: {e}"
         )
 
-# ✅ 추가: 거래 기록 조회
 async def history_command(update: Update, context):
     try:
-        # ✅ 수정: 명령어 인자로 받은 숫자를 limit으로 설정, 기본값은 5
         limit = 5
         if context.args:
             try:
@@ -275,10 +292,8 @@ async def history_command(update: Update, context):
             text=f"오류 발생: {e}"
         )
 
-# ✅ 추가: 봇 상태 확인
 async def health_command(update: Update, context):
     try:
-        # Bybit API 연결 상태 확인
         health_check = bybit_client.get_wallet_balance(accountType="UNIFIED")
         
         if health_check['retCode'] == 0:
