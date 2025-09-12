@@ -47,12 +47,13 @@ def parse_telegram_message(message_text):
                 'fund_percentage': fund_percentage,
                 'entry_price': entry_price,
                 'stop_loss': stop_loss,
-                'targets': targets
+                'targets': targets,
+                'original_message': message_text # 원본 메시지 텍스트 추가
             }
             
         # 3. 기존 메시지 형식 처리 (기존 로직 유지)
-        symbol_match = re.search(r'\$([A-Z0-9]+)', message_text)
-        leverage_match = re.search(r'Leverage:\s*x(\d+)', message_text)
+        symbol_match = re.search(r'\$([A-Z0-9]+)', message_text, re.IGNORECASE)
+        leverage_match = re.search(r'Leverage:\s*x(\d+)', message_text, re.IGNORECASE)
         fund_match = re.search(r'Fund:\s*(\d+)%', message_text)
         entry_match = re.search(r'Entry:\s*(NOW|(\d+(?:\.\d{1,3})?)(?:[xX]{1,2}|\.[xX]{1,2})?)', message_text)
         tp_matches = re.findall(r'TP\d+:\s*([\d\.]+)', message_text)
@@ -61,7 +62,7 @@ def parse_telegram_message(message_text):
             print(MESSAGES['parsing_failed_old_format'])
             return None
 
-        symbol = symbol_match.group(1) + "USDT"
+        symbol = symbol_match.group(1).upper() + "USDT"
         leverage = int(leverage_match.group(1))
         fund_percentage = float(fund_match.group(1)) / 100
         
@@ -96,7 +97,8 @@ def parse_telegram_message(message_text):
             'fund_percentage': fund_percentage,
             'entry_price': entry_price,
             'stop_loss': stop_loss,
-            'targets': targets
+            'targets': targets,
+            'original_message': message_text # 원본 메시지 텍스트 추가
         }
         
     except Exception as e:

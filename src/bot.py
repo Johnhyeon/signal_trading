@@ -7,9 +7,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
 from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
 from portfolio_manager import generate_report
-from trade_executor import send_bybit_failure_msg
-
-from utils import MESSAGES
+from trade_executor import send_bybit_summary_msg
+from utils import MESSAGES, log_error_and_send_message # 수정: log_error_and_send_message 임포트
 
 # ✅ 봇 명령어 처리 함수들
 async def open_orders_command(update: Update, context):
@@ -36,7 +35,7 @@ async def open_orders_command(update: Update, context):
 
                     message_text += (
                         f"**{MESSAGES['symbol']}:** {symbol} | **{MESSAGES['side']}:** {order['side']}\n"
-                        f"**{MESSAGES['qty']}:** {order['qty']} | **{MESSAGES['price']}:** {order['price']} | **{MESSAGES['current_price']}:** {current_price}\n"
+                        f"**{MESSAGES['qty']}:** {order['qty']} | **{MESSAGES['price']}:** {order['price']} | **{MESSAGES['current_price']}:** {current_price}\n\n"
                     )
             else:
                 message_text = MESSAGES['no_open_orders']
@@ -49,9 +48,10 @@ async def open_orders_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
 
 async def positions_command(update: Update, context):
@@ -102,9 +102,10 @@ async def positions_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
 
 async def price_command(update: Update, context):
@@ -138,9 +139,10 @@ async def price_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
 
 async def pf_command(update: Update, context):
@@ -160,9 +162,10 @@ async def pf_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
 
 async def balance_command(update: Update, context):
@@ -193,9 +196,10 @@ async def balance_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
         
 async def cancel_all_command(update: Update, context):
@@ -234,9 +238,10 @@ async def cancel_all_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
 
 async def history_command(update: Update, context):
@@ -282,14 +287,15 @@ async def history_command(update: Update, context):
             parse_mode='Markdown'
         )
     except FileNotFoundError:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=MESSAGES['no_trade_history']
+        log_error_and_send_message(
+            MESSAGES['no_trade_history'],
+            chat_id=update.effective_chat.id
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
 
 async def health_command(update: Update, context):
@@ -313,9 +319,10 @@ async def health_command(update: Update, context):
             parse_mode='Markdown'
         )
     except Exception as e:
-        await bybit_bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=f"오류 발생: {e}"
+        log_error_and_send_message(
+            f"오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
         )
         
 async def menu_command(update: Update, context):

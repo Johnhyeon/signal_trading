@@ -6,10 +6,13 @@ from api_clients import bybit_client, bybit_bot, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message
 from portfolio_manager import record_trade_result
 # 수정: main.py 대신 utils.py에서 메시지 변수 임포트
-from utils import MESSAGES
+from utils import MESSAGES, save_active_orders, log_error_and_send_message
 
 # 메시지 ID와 주문 정보를 매핑할 전역 딕셔너리
 active_orders = {}
+
+# 이미 청산 모니터링이 시작된 메시지 ID를 추적하는 set
+monitored_trade_ids = set()
 
 # 종목명 스케일링 인자 리스트
 SCALING_FACTORS = [1000, 10000, 100000]
@@ -46,21 +49,6 @@ async def send_bybit_cancel_msg(symbol):
         parse_mode='Markdown'
     )
 
-async def send_bybit_failure_msg(symbol, reason):
-    """
-    Bybit 주문 실패 메시지를 텔레그램 봇으로 전송합니다.
-    """
-    message_summary = (
-        MESSAGES['order_fail_title'].format(symbol=symbol) + "\n"
-        f"▪️ **사유:** `{reason}`"
-    )
-
-    await bybit_bot.send_message(
-        chat_id=TELE_BYBIT_LOG_CHAT_ID,
-        text=message_summary,
-        parse_mode='Markdown'
-    )
-
 async def record_trade_result_on_close(symbol, message_id):
     """
     포지션이 청산될 때까지 모니터링하고, 청산되면 거래 결과를 기록하고 active_orders에서 제거합니다.
@@ -70,58 +58,59 @@ async def record_trade_result_on_close(symbol, message_id):
     # 이전에 열린 포지션이 있는지 확인하는 플래그
     is_position_open = False
     
-    while True:
-        try:
-            positions_info = bybit_client.get_positions(category="linear", symbol=symbol)
-            
-            if positions_info['retCode'] == 0 and positions_info['result']['list']:
-                position = positions_info['result']['list'][0]
+    try: # try 블록 추가
+        while True:
+            try:
+                positions_info = bybit_client.get_positions(category="linear", symbol=symbol)
                 
-                # 포지션이 열렸는지 확인
-                if float(position['size']) > 0:
-                    is_position_open = True
-                
-                # 포지션이 열린 후 닫혔는지 확인
-                if is_position_open and float(position['size']) == 0:
-                    print(MESSAGES['position_closed_success'].format(symbol=symbol))
+                if positions_info['retCode'] == 0 and positions_info['result']['list']:
+                    position = positions_info['result']['list'][0]
                     
-                    # 닫힌 PNL 정보 가져오기
-                    closed_pnl_info = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=1)
+                    # 포지션이 열렸는지 확인
+                    if float(position['size']) > 0:
+                        is_position_open = True
                     
-                    if closed_pnl_info['retCode'] == 0 and closed_pnl_info['result']['list']:
-                        closed_trade_data = closed_pnl_info['result']['list'][0]
+                    # 포지션이 열린 후 닫혔는지 확인
+                    if is_position_open and float(position['size']) == 0:
+                        print(MESSAGES['position_closed_success'].format(symbol=symbol))
                         
-                        trade_result = {
-                            'symbol': closed_trade_data['symbol'],
-                            'side': closed_trade_data['side'],
-                            'entry_price': float(closed_trade_data['avgEntryPrice']),
-                            'exit_price': float(closed_trade_data['avgExitPrice']),
-                            'qty': float(closed_trade_data['closedSize']),
-                            'pnl': float(closed_trade_data['closedPnl']),
-                            'created_at': datetime.fromtimestamp(int(closed_trade_data['createdTime']) / 1000).isoformat()
-                        }
+                        closed_pnl_info = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=1)
                         
-                        # 새로운 파일에 기록
-                        record_trade_result(trade_result)
-                        
-                        # ✅ 추가: active_orders에서 해당 주문 제거
-                        if message_id in active_orders:
-                            del active_orders[message_id]
-                            print(f"✅ 포지션 청산 완료 후, active_orders에서 {symbol} 주문을 제거했습니다.")
+                        if closed_pnl_info['retCode'] == 0 and closed_pnl_info['result']['list']:
+                            closed_trade_data = closed_pnl_info['result']['list'][0]
                             
-                        print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
-                        await bybit_bot.send_message(
-                            chat_id=TELE_BYBIT_LOG_CHAT_ID,
-                            text=MESSAGES['trade_closed_pnl_message'].format(symbol=symbol, pnl=trade_result['pnl'])
-                        )
-                    else:
-                        print(MESSAGES['trade_record_fetch_fail'].format(symbol=symbol))
-                        
-                    return # 작업 완료 후 루프 종료
-        except Exception as e:
-            print(MESSAGES['position_monitor_error'].format(error_msg=e))
-            
-        await asyncio.sleep(5) # 5초 대기
+                            trade_result = {
+                                'symbol': closed_trade_data['symbol'],
+                                'side': closed_trade_data['side'],
+                                'entry_price': float(closed_trade_data['avgEntryPrice']),
+                                'exit_price': float(closed_trade_data['avgExitPrice']),
+                                'qty': float(closed_trade_data['closedSize']),
+                                'pnl': float(closed_trade_data['closedPnl']),
+                                'created_at': datetime.fromtimestamp(int(closed_trade_data['createdTime']) / 1000).isoformat()
+                            }
+                            
+                            record_trade_result(trade_result)
+                            
+                            if message_id in active_orders:
+                                del active_orders[message_id]
+                                print(f"✅ 포지션 청산 완료 후, active_orders에서 {symbol} 주문을 제거했습니다.")
+                                
+                            print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
+                            await bybit_bot.send_message(
+                                chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                                text=MESSAGES['trade_closed_pnl_message'].format(symbol=symbol, pnl=trade_result['pnl'])
+                            )
+                        else:
+                            print(MESSAGES['trade_record_fetch_fail'].format(symbol=symbol))
+                            
+                        return
+            except Exception as e:
+                print(MESSAGES['position_monitor_error'].format(error_msg=e))
+                
+            await asyncio.sleep(5)
+    finally: # finally 블록 추가
+        if message_id in monitored_trade_ids:
+            monitored_trade_ids.remove(message_id)
 
 def execute_bybit_order(order_info, message_id):
     """
@@ -148,7 +137,7 @@ def execute_bybit_order(order_info, message_id):
         wallet_balance = bybit_client.get_wallet_balance(accountType="UNIFIED")
         usdt_balance = next((item for item in wallet_balance['result']['list'][0]['coin'] if item['coin'] == 'USDT'), None)
         if not usdt_balance:
-            print(MESSAGES['usdt_balance_not_found'])
+            log_error_and_send_message(MESSAGES['usdt_balance_not_found'])
             return
 
         total_usdt = float(usdt_balance['equity'])
@@ -229,17 +218,16 @@ def execute_bybit_order(order_info, message_id):
 
                 else:
                     print("종목 정보를 가져오는 데 실패했습니다. 레버리지 자동 조정 불가.")
-                    asyncio.run_coroutine_threadsafe(
-                        send_bybit_failure_msg(original_symbol, reason="Failed to get instrument info for leverage adjustment."),
-                        asyncio.get_event_loop()
+                    log_error_and_send_message(
+                        f"레버리지 조정을 위한 종목 정보 가져오기 실패.",
+                        exc=e
                     )
                     return
             else:
                 # 레버리지 관련 오류가 아닌 경우
-                print(f"Bybit 레버리지 설정 중 알 수 없는 오류 발생: {e}")
-                asyncio.run_coroutine_threadsafe(
-                    send_bybit_failure_msg(original_symbol, reason=str(e)),
-                    asyncio.get_event_loop()
+                log_error_and_send_message(
+                    f"Bybit 레버리지 설정 중 알 수 없는 오류 발생.",
+                    exc=e
                 )
                 return
 
@@ -375,18 +363,16 @@ def execute_bybit_order(order_info, message_id):
                     
             # 2-2. 스케일링 시도 후 성공 여부 확인
             if not found_symbol:
-                print(MESSAGES['all_scaling_failed'].format(original_symbol=original_symbol))
-                asyncio.run_coroutine_threadsafe(
-                    send_bybit_failure_msg(original_symbol, MESSAGES['no_valid_symbol_found']),
-                    asyncio.get_event_loop()
+                log_error_and_send_message(
+                    MESSAGES['all_scaling_failed'].format(original_symbol=original_symbol),
+                    exc=e
                 )
                 return
             
         else: # 다른 종류의 오류일 경우
-            print(MESSAGES['order_edit_system_error'].format(error_msg=e))
-            asyncio.run_coroutine_threadsafe(
-                send_bybit_failure_msg(original_symbol, reason=str(e)),
-                asyncio.get_event_loop()
+            log_error_and_send_message(
+                MESSAGES['order_edit_system_error'].format(error_msg=e),
+                exc=e
             )
             return
 
@@ -414,8 +400,10 @@ def execute_bybit_order(order_info, message_id):
                 'positionIdx': position_idx,
                 'orderId': bybit_order_id,
                 'fund_percentage': order_info['fund_percentage'],
-                'leverage': order_info['leverage'] # leverage 추가
+                'leverage': order_info['leverage'], # leverage 추가
+                'original_message': order_info['original_message'] # 원본 메시지 텍스트 저장
             }
+            save_active_orders(active_orders) # 추가: 파일에 저장
             
             # 텔레그램 요약 메시지 전송
             asyncio.run_coroutine_threadsafe(
@@ -423,25 +411,25 @@ def execute_bybit_order(order_info, message_id):
                 asyncio.get_event_loop()
             )
 
+        else:
+            log_error_and_send_message(
+                MESSAGES['position_info_error']
+            )
+
+    else:
+        # 이전에 처리되지 않은 다른 주문 실패
+        log_error_and_send_message(
+            f"{MESSAGES['order_failed']} {order_result['retMsg']}"
+        )
+
             # ✅ 포지션 청산 모니터링 시작 (message_id 전달)
+        if message_id not in monitored_trade_ids:
+            monitored_trade_ids.add(message_id) # 모니터링 시작
             asyncio.run_coroutine_threadsafe(
                 record_trade_result_on_close(order_info['symbol'], message_id),
                 asyncio.get_event_loop()
             )
             
-        else:
-            print(MESSAGES['position_info_error'])
-            asyncio.run_coroutine_threadsafe(
-                send_bybit_failure_msg(order_info['symbol'], MESSAGES['sl_tp_disabled_warning']),
-                asyncio.get_event_loop()
-            )
-    else:
-        # 이전에 처리되지 않은 다른 주문 실패
-        print(MESSAGES['order_failed'], order_result)
-        asyncio.run_coroutine_threadsafe(
-            send_bybit_failure_msg(order_info['symbol'], reason=order_result['retMsg']),
-            asyncio.get_event_loop()
-        )
 
 async def cancel_bybit_order(symbol_to_cancel):
     """
@@ -457,7 +445,6 @@ async def cancel_bybit_order(symbol_to_cancel):
         )
 
         if cancel_all_result['retCode'] == 0:
-            # --- 수정된 부분: 취소된 주문이 있는지 확인 ---
             if cancel_all_result['result']['list']:
                 print(MESSAGES['cancel_all_success'].format(symbol=symbol_to_cancel))
                 await send_bybit_cancel_msg(symbol_to_cancel)
@@ -466,17 +453,24 @@ async def cancel_bybit_order(symbol_to_cancel):
                 orders_to_remove = [msg_id for msg_id, order_info in active_orders.items() if order_info['symbol'] == symbol_to_cancel]
                 for msg_id in orders_to_remove:
                     del active_orders[msg_id]
+                # ✅ 추가: 파일에 저장
+                save_active_orders(active_orders)
             else:
-                # 취소할 주문이 없는 경우
-                print(MESSAGES['no_open_order_to_cancel'])
-                await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['no_open_order_to_cancel'])
+                log_error_and_send_message(
+                    MESSAGES['no_open_order_to_cancel'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
         else:
-            print(MESSAGES['cancel_fail'].format(symbol=symbol_to_cancel, error_msg=cancel_all_result['retMsg']))
-            await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['cancel_fail'].format(symbol=symbol_to_cancel, error_msg=cancel_all_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['cancel_fail'].format(symbol=symbol_to_cancel, error_msg=cancel_all_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
 
     except Exception as e:
-        print(MESSAGES['cancel_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['cancel_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['cancel_system_error'].format(error_msg=e),
+            exc=e
+        )
 
 
 async def update_stop_loss_to_entry(symbol, side, position_idx, entry_price):
@@ -495,7 +489,10 @@ async def update_stop_loss_to_entry(symbol, side, position_idx, entry_price):
                     text=MESSAGES['sl_move_to_market_price'].format(price=new_sl)
                 )
             else:
-                await send_bybit_failure_msg(symbol, "현재 가격 정보를 가져오는 데 실패했습니다.")
+                log_error_and_send_message(
+                    "현재 가격 정보를 가져오는 데 실패했습니다.",
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
                 return
         else:
             new_sl = str(entry_price)
@@ -515,12 +512,16 @@ async def update_stop_loss_to_entry(symbol, side, position_idx, entry_price):
                 text=MESSAGES['sl_update_complete'].format(symbol=symbol, new_sl=new_sl)
             )
         else:
-            print(MESSAGES['sl_update_fail'].format(symbol=symbol, error_msg=amend_result['retMsg']))
-            await send_bybit_failure_msg(symbol, MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             
     except Exception as e:
-        print(MESSAGES['sl_update_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol, MESSAGES['sl_update_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['sl_update_system_error'].format(error_msg=e),
+            exc=e
+        )
 
 async def update_stop_loss_to_tp1(symbol, side, position_idx, tp1_price):
     """
@@ -543,12 +544,16 @@ async def update_stop_loss_to_tp1(symbol, side, position_idx, tp1_price):
                 text=MESSAGES['sl_update_complete'].format(symbol=symbol, new_sl=new_sl)
             )
         else:
-            print(MESSAGES['sl_update_fail'].format(symbol=symbol, error_msg=amend_result['retMsg']))
-            await send_bybit_failure_msg(symbol, MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             
     except Exception as e:
-        print(MESSAGES['sl_update_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol, MESSAGES['sl_update_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['sl_update_system_error'].format(error_msg=e),
+            exc=e
+        )
         
 async def update_stop_loss_to_tp2(symbol, side, position_idx, tp2_price):
     """
@@ -571,12 +576,16 @@ async def update_stop_loss_to_tp2(symbol, side, position_idx, tp2_price):
                 text=MESSAGES['sl_update_complete'].format(symbol=symbol, new_sl=new_sl)
             )
         else:
-            print(MESSAGES['sl_update_fail'].format(symbol=symbol, error_msg=amend_result['retMsg']))
-            await send_bybit_failure_msg(symbol, MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             
     except Exception as e:
-        print(MESSAGES['sl_update_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol, MESSAGES['sl_update_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['sl_update_system_error'].format(error_msg=e),
+            exc=e
+        )
 
 async def update_stop_loss_to_value(symbol, side, position_idx, new_sl_price):
     """
@@ -597,7 +606,7 @@ async def update_stop_loss_to_value(symbol, side, position_idx, new_sl_price):
                 chat_id=TELE_BYBIT_LOG_CHAT_ID,
                 text=MESSAGES['sl_update_complete'].format(symbol=symbol, new_sl=new_sl_price)
             )
-        elif result['retCode'] == 34040:
+        elif amend_result['retCode'] == 34040:
             # ErrCode 34040은 "not modified"를 의미하며, 이미 동일한 값으로 설정되어 있다는 뜻입니다.
             print(f"ℹ️ SL 값이 이미 {new_sl_price}로 설정되어 있어 변경을 건너뜁니다. (ErrCode: 34040)")
             await bybit_bot.send_message(
@@ -605,12 +614,16 @@ async def update_stop_loss_to_value(symbol, side, position_idx, new_sl_price):
                 text=f"ℹ️ **{symbol}** SL 값 변경 실패\n사유: `이미 설정된 값과 동일`"
             )
         else:
-            print(MESSAGES['sl_update_fail'].format(symbol=symbol, error_msg=amend_result['retMsg']))
-            await send_bybit_failure_msg(symbol, MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['sl_update_fail_reason'].format(error_msg=amend_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
 
     except Exception as e:
-        print(MESSAGES['sl_update_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol, MESSAGES['sl_update_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['sl_update_system_error'].format(error_msg=e),
+            exc=e
+        )
 
 # DCA 주문을 실행하는 함수
 def place_dca_order(order_info, dca_price):
@@ -653,11 +666,7 @@ def place_dca_order(order_info, dca_price):
 
     except Exception as e:
         # ✅ 수정: 추가한 'dca_order_error' 키 사용
-        print(MESSAGES['dca_order_fail'].format(error_msg=e))
-        asyncio.run_coroutine_threadsafe(
-            bybit_bot.send_message(
-                chat_id=TELE_BYBIT_LOG_CHAT_ID,
-                text=MESSAGES['dca_order_fail'].format(error_msg=e)
-            ),
-            asyncio.get_event_loop()
+        log_error_and_send_message(
+            MESSAGES['dca_order_fail'].format(error_msg=e),
+            exc=e
         )

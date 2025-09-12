@@ -7,9 +7,8 @@ import os
 from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST_CHANNEL_ID, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message, parse_dca_message
 from portfolio_manager import generate_report
-from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, send_bybit_failure_msg, send_bybit_cancel_msg, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2
-
-from utils import MESSAGES
+from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2, monitored_trade_ids
+from utils import MESSAGES, load_active_orders, log_error_and_send_message, save_active_orders # 수정: log_error_and_send_message 임포트
 
 
 # -----------------
@@ -37,7 +36,10 @@ async def my_event_handler(event):
 
         if existing_order:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))
-            await send_bybit_failure_msg(order_info['symbol'], MESSAGES['duplicate_order_reason'])
+            log_error_and_send_message(
+                MESSAGES['duplicate_order_reason'],
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             return
 
         execute_bybit_order(order_info, event.id)
@@ -54,6 +56,10 @@ async def handle_edited_message(event):
     print(f"\n{MESSAGES['edited_message_detected']}\n{message_text}")
 
     if message_id not in active_orders:
+        return
+    
+    if active_orders[message_id]['original_message'] == message_text:
+        print("⚠️ 메시지 내용이 변경되지 않았으므로 주문 수정 작업을 건너뜁니다.")
         return
 
     print(MESSAGES['edited_message_alert'].format(message_id=message_id))
@@ -76,23 +82,30 @@ async def handle_edited_message(event):
 
         if cancel_result['retCode'] == 0:
             print(MESSAGES['order_cancel_success'].format(order_id=bybit_order_id))
-            await send_bybit_cancel_msg(symbol_to_cancel)
+            # await send_bybit_cancel_msg(symbol_to_cancel)
             
             updated_order_info = parse_telegram_message(event.message.message)
             if updated_order_info:
                 print(MESSAGES['new_order_from_edit'])
-                await execute_bybit_order(updated_order_info, message_id)
+                execute_bybit_order(updated_order_info, message_id)
             else:
                 print(MESSAGES['edit_parsing_fail'])
-                await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['edit_parsing_fail_alert'])
+                log_error_and_send_message(
+                    MESSAGES['edit_parsing_fail_alert'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
 
         else:
-            print(MESSAGES['order_cancel_fail'].format(error_msg=cancel_result['retMsg']))
-            await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['order_cancel_fail'].format(error_msg=cancel_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['order_cancel_fail'].format(error_msg=cancel_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             
     except Exception as e:
-        print(MESSAGES['order_edit_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['order_edit_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['order_edit_system_error'].format(error_msg=e),
+            exc=e
+        )
 
 
 @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, func=lambda e: e.is_reply))
@@ -115,7 +128,10 @@ async def handle_dca_and_sl_update(event):
             )
             place_dca_order(order_info, dca_price)
         else:
-            await send_bybit_failure_msg("DCA/SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
         return
 
     if 'movesl=entry' in message_text:
@@ -124,7 +140,10 @@ async def handle_dca_and_sl_update(event):
             order_info = active_orders[original_msg_id]
             await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['entry_price'])
         else:
-            await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
     
     elif 'movesl=tp1' in message_text:
         original_msg_id = event.reply_to_msg_id
@@ -133,9 +152,15 @@ async def handle_dca_and_sl_update(event):
             if len(order_info['targets']) >= 1:
                 await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][0])
             else:
-                await send_bybit_failure_msg("SL", MESSAGES['tp1_not_found'])
+                log_error_and_send_message(
+                    MESSAGES['tp1_not_found'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
         else:
-            await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
     
     elif 'movesl=tp2' in message_text:
         original_msg_id = event.reply_to_msg_id
@@ -144,9 +169,15 @@ async def handle_dca_and_sl_update(event):
             if len(order_info['targets']) >= 2:
                 await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][1])
             else:
-                await send_bybit_failure_msg("SL", MESSAGES['tp2_not_found'])
+                log_error_and_send_message(
+                    MESSAGES['tp2_not_found'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
         else:
-            await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
 
 
 @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, func=lambda e: e.is_reply and 'cancel' in e.message.message.lower()))
@@ -161,8 +192,10 @@ async def handle_cancel_reply(event):
         print(MESSAGES['cancel_message_info'].format(symbol=symbol))
         await cancel_bybit_order(symbol)
     else:
-        print(MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
-        await send_bybit_failure_msg("Cancel", MESSAGES['no_open_order_to_cancel'])
+        log_error_and_send_message(
+            MESSAGES['no_open_order_to_cancel'],
+            chat_id=TELE_BYBIT_LOG_CHAT_ID
+        )
 
 #=======================================================================================================================================#
 ##### 테스트용
@@ -212,7 +245,10 @@ async def my_event_handler(event):
         if existing_symbol:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))
             # 사용자에게 알림 메시지를 보내는 것도 좋은 방법입니다.
-            await send_bybit_failure_msg(order_info['symbol'], MESSAGES['duplicate_order_reason'])
+            log_error_and_send_message(
+                MESSAGES['duplicate_order_reason'],
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             return
 
         # 메시지 ID를 인수로 전달
@@ -236,6 +272,10 @@ async def handle_edited_message(event):
     if message_id not in active_orders:
         return
 
+    if active_orders[message_id]['original_message'] == message_text:
+        print("⚠️ 메시지 내용이 변경되지 않았으므로 주문 수정 작업을 건너뜁니다.")
+        return
+
     print(MESSAGES['edited_message_alert'].format(message_id=message_id))
     
     try:
@@ -257,30 +297,38 @@ async def handle_edited_message(event):
 
         if cancel_result['retCode'] == 0:
             print(MESSAGES['order_cancel_success'].format(order_id=bybit_order_id))
-            await send_bybit_cancel_msg(symbol_to_cancel)
+            # await send_bybit_cancel_msg(symbol_to_cancel)
             
             # 2. 취소가 성공한 경우에만 새로운 메시지 파싱 및 주문 실행
             updated_order_info = parse_telegram_message(event.message.message)
             if updated_order_info:
                 print(MESSAGES['new_order_from_edit'])
                 # execute_bybit_order가 async 함수로 변경되었다고 가정
-                await execute_bybit_order(updated_order_info, message_id)
+                execute_bybit_order(updated_order_info, message_id)
             else:
                 print(MESSAGES['edit_parsing_fail'])
                 # 이 경우 기존 주문이 취소된 상태이므로 사용자에게 알려주는 것이 중요
-                await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['edit_parsing_fail_alert'])
+                log_error_and_send_message(
+                    MESSAGES['edit_parsing_fail_alert'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
 
         else:
             # 3. 기존 주문 취소 실패 (이미 체결 또는 기타 사유)
             print(MESSAGES['order_cancel_fail'].format(error_msg=cancel_result['retMsg']))
             
             # 취소 실패 메시지 전송
-            await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['order_cancel_fail'].format(error_msg=cancel_result['retMsg']))
+            log_error_and_send_message(
+                MESSAGES['order_cancel_fail'].format(error_msg=cancel_result['retMsg']),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
             # 이미 체결된 주문에 대한 메시지 처리가 필요하면 추가 로직 구현
             
     except Exception as e:
-        print(MESSAGES['order_edit_system_error'].format(error_msg=e))
-        await send_bybit_failure_msg(symbol_to_cancel, MESSAGES['order_edit_system_error'].format(error_msg=str(e)))
+        log_error_and_send_message(
+            MESSAGES['order_edit_system_error'].format(error_msg=e),
+            exc=e
+        )
 
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID, func=lambda e: e.is_reply))
 async def handle_dca_and_sl_update(event):
@@ -304,7 +352,10 @@ async def handle_dca_and_sl_update(event):
             # DCA 주문 실행
             place_dca_order(order_info, dca_price)
         else:
-            await send_bybit_failure_msg("DCA/SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
         return
 
     # 기존 SL 이동 로직 유지
@@ -314,7 +365,10 @@ async def handle_dca_and_sl_update(event):
             order_info = active_orders[original_msg_id]
             await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['entry_price'])
         else:
-            await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
     
     elif 'movesl=tp1' in message_text:
         original_msg_id = event.reply_to_msg_id
@@ -323,9 +377,15 @@ async def handle_dca_and_sl_update(event):
             if len(order_info['targets']) >= 1:
                 await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][0])
             else:
-                await send_bybit_failure_msg("SL", MESSAGES['tp1_not_found'])
+                log_error_and_send_message(
+                    MESSAGES['tp1_not_found'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
         else:
-            await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
     
     elif 'movesl=tp2' in message_text:
         original_msg_id = event.reply_to_msg_id
@@ -334,9 +394,15 @@ async def handle_dca_and_sl_update(event):
             if len(order_info['targets']) >= 2:
                 await update_stop_loss_to_value(order_info['symbol'], order_info['side'], order_info['positionIdx'], order_info['targets'][1])
             else:
-                await send_bybit_failure_msg("SL", MESSAGES['tp2_not_found'])
+                log_error_and_send_message(
+                    MESSAGES['tp2_not_found'],
+                    chat_id=TELE_BYBIT_LOG_CHAT_ID
+                )
         else:
-            await send_bybit_failure_msg("SL", MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
+            log_error_and_send_message(
+                MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
+                chat_id=TELE_BYBIT_LOG_CHAT_ID
+            )
 
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID, func=lambda e: e.is_reply and 'cancel' in e.message.message.lower()))
 async def handle_cancel_reply(event):
@@ -350,13 +416,23 @@ async def handle_cancel_reply(event):
         print(MESSAGES['cancel_message_info'].format(symbol=symbol))
         await cancel_bybit_order(symbol)
     else:
-        print(MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id))
-        await send_bybit_failure_msg("Cancel", MESSAGES['no_open_order_to_cancel'])
+        log_error_and_send_message(
+            MESSAGES['no_open_order_to_cancel'],
+            chat_id=TELE_BYBIT_LOG_CHAT_ID
+        )
 
 #=======================================================================================================================================#
 
 async def main():
     try:
+        # ✅ 추가: 봇 시작 시 저장된 활성 주문 정보를 불러옵니다.
+        # 이 코드는 텔레그램 클라이언트가 시작되기 전에 실행되어야 합니다.
+        loaded_orders = load_active_orders()
+        active_orders.update(loaded_orders)
+        for message_id in active_orders.keys():
+            monitored_trade_ids.add(message_id)
+        print("✅ 이전에 저장된 활성 주문 정보를 성공적으로 불러왔습니다.")
+
         await client.start()
         print("Telethon client started...")
         print(MESSAGES['application_run_message'])
@@ -376,6 +452,10 @@ async def main():
 
     except Exception as e:
         print(MESSAGES['initial_connection_error'].format(error_msg=e))
+        log_error_and_send_message(
+            MESSAGES['initial_connection_error'].format(error_msg=e),
+            exc=e
+        )
 
 if __name__ == "__main__":
     with client:
