@@ -55,7 +55,7 @@ def parse_telegram_message(message_text):
         symbol_match = re.search(r'\$([A-Z0-9]+)', message_text, re.IGNORECASE)
         leverage_match = re.search(r'Leverage:\s*x(\d+)', message_text, re.IGNORECASE)
         fund_match = re.search(r'Fund:\s*(\d+)%', message_text)
-        entry_match = re.search(r'Entry:\s*(NOW|(\d+(?:\.\d{1,3})?)(?:[xX]{1,2}|\.[xX]{1,2})?)', message_text)
+        entry_match = re.search(r'Entry:\s*(NOW|(\d+(?:\.\d+)?)(?:[xX]{1,2}|\.[xX]{1,2})?)', message_text)
         tp_matches = re.findall(r'TP\d+:\s*([\d\.]+)', message_text)
         
         if not all([symbol_match, leverage_match, fund_match, entry_match, sl_match_final, tp_matches]):
@@ -66,7 +66,7 @@ def parse_telegram_message(message_text):
         leverage = int(leverage_match.group(1))
         fund_percentage = float(fund_match.group(1)) / 100
         
-        entry_price_str = entry_match.group(1)
+        entry_price_str = entry_match.group(1).lower()
         
         if 'xx' in entry_price_str:
             base_price_str = entry_price_str.replace('xx', '')
