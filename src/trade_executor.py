@@ -386,18 +386,21 @@ def execute_bybit_order(order_info, message_id):
         time.sleep(1) # 포지션 업데이트 대기
         positions_info = bybit_client.get_positions(category="linear", symbol=order_info['symbol'])
         if positions_info['retCode'] == 0 and positions_info['result']['list']:
-            position_data = positions_info['result']['list'][0]
-            position_side = position_data['side']
-            position_idx = position_data['positionIdx']
+            # position_data = positions_info['result']['list'][0]
+            # print(f"포지션 정보: {position_data}")
+            # position_side = position_data['side']
+            # print(f"포지션: {position_side}")
+            # position_idx = position_data['positionIdx']
             
             # ✅ 수정: DB 저장을 위해 message_id를 포함하여 주문 정보를 딕셔너리에 담음
             order_data_to_save = {
                 'message_id': message_id,
                 'symbol': order_info['symbol'],
-                'side': position_side,
+                'side': order_info['side'], # ✅ 이 부분을 이렇게 변경합니다.
                 'entry_price': order_info['entry_price'],
                 'targets': order_info['targets'],
-                'positionIdx': position_idx,
+                # 나머지 필드는 그대로 유지
+                'positionIdx': None, # 체결되지 않았으므로 None으로 설정
                 'orderId': bybit_order_id,
                 'fund_percentage': order_info['fund_percentage'],
                 'leverage': order_info['leverage'],

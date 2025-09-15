@@ -8,9 +8,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
 from portfolio_manager import generate_report
 from trade_executor import send_bybit_summary_msg
-from utils import MESSAGES, log_error_and_send_message # 수정: log_error_and_send_message 임포트
+from utils import MESSAGES, log_error_and_send_message
+from database_manager import get_active_orders, get_db_connection
 
-# ✅ 봇 명령어 처리 함수들
+# 봇 명령어 처리 함수들
 async def open_orders_command(update: Update, context):
     try:
         print("API 호출: bybit_client.get_open_orders(category='linear', settleCoin='USDT')")
@@ -27,7 +28,6 @@ async def open_orders_command(update: Update, context):
                 message_text = MESSAGES['open_orders_title'] + "\n\n"
                 for order in filtered_orders:
                     symbol = order['symbol']
-                    # ✅ 수정: 현재가 추가
                     ticker_info = bybit_client.get_tickers(category="linear", symbol=symbol)
                     current_price = "정보 없음"
                     if ticker_info['retCode'] == 0 and ticker_info['result']['list']:
@@ -63,7 +63,7 @@ async def positions_command(update: Update, context):
         if positions_info['retCode'] == 0 and positions_info['result']['list']:
             message_text = MESSAGES['positions_title'] + "\n\n"
             found_position = False
-            total_unrealized_pnl = 0.0 # ✅ 추가: 총 미실현 손익을 계산할 변수 초기화
+            total_unrealized_pnl = 0.0
             for position in positions_info['result']['list']:
                 if float(position['size']) > 0:
                     found_position = True
@@ -73,7 +73,6 @@ async def positions_command(update: Update, context):
                     if ticker_info['retCode'] == 0 and ticker_info['result']['list']:
                         current_price = ticker_info['result']['list'][0]['lastPrice']
 
-                    # ✅ 수정: API 응답의 'unrealisedPnl' 키를 사용하고 float으로 변환
                     pnl_value_str = position.get('unrealisedPnl', '0')
                     try:
                         pnl_value = float(pnl_value_str)
@@ -89,7 +88,7 @@ async def positions_command(update: Update, context):
                     )
             
             if found_position:
-                message_text += f"**{MESSAGES['total_unrealized_pnl']}:** `{total_unrealized_pnl:.2f}` USDT\n" # ✅ 추가
+                message_text += f"**{MESSAGES['total_unrealized_pnl']}:** `{total_unrealized_pnl:.2f}` USDT\n"
             else:
                 message_text = MESSAGES['no_positions']
 
@@ -176,7 +175,6 @@ async def balance_command(update: Update, context):
             usdt_balance_data = next((item for item in balance_info['result']['list'][0]['coin'] if item['coin'] == 'USDT'), None)
             
             if usdt_balance_data:
-                # ✅ 수정: 빈 문자열을 0.0으로 처리
                 total_balance = float(usdt_balance_data.get('walletBalance') or 0.0)
                 available_balance = float(usdt_balance_data.get('availableToWithdraw') or 0.0)
                 
@@ -209,7 +207,6 @@ async def cancel_all_command(update: Update, context):
         print(f"API 응답: {orders_info}")
 
         if orders_info['retCode'] == 0 and orders_info['result']['list']:
-            # 'Limit' 또는 'Market' 주문만 필터링합니다.
             orders_to_cancel = [
                 order for order in orders_info['result']['list']
                 if order.get('orderType') in ['Limit']
@@ -257,24 +254,23 @@ async def history_command(update: Update, context):
                 )
                 return
 
-        # ✅ 수정: 파일 경로를 올바르게 지정
-        log_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'log', 'trade_log.json')
-        print(f"디버깅: history_command가 로그 파일을 찾는 경로 -> {log_file_path}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        with open(log_file_path, 'r', encoding='utf-8') as f:
-            trade_history = json.load(f)
+        cursor.execute("SELECT * FROM trade_log ORDER BY created_at DESC LIMIT ?", (limit,))
+        trade_history = cursor.fetchall()
+        conn.close()
 
         if not trade_history:
             message_text = MESSAGES['no_trade_history']
         else:
             message_text = MESSAGES['history_title'] + "\n\n"
-            recent_trades = trade_history[-limit:]
             
-            for trade in recent_trades:
-                symbol = trade.get('symbol', 'N/A')
-                side = trade.get('side', 'N/A')
-                pnl = trade.get('pnl', '0')
-                created_at = trade.get('created_at', 'N/A').split('T')[0]
+            for trade in trade_history:
+                symbol = trade['symbol']
+                side = trade['side']
+                pnl = trade['pnl']
+                created_at = trade['created_at'].split('T')[0]
                 
                 message_text += (
                     f"**{MESSAGES['symbol']}:** {symbol} | **{MESSAGES['side']}:** {side}\n"
@@ -285,11 +281,6 @@ async def history_command(update: Update, context):
             chat_id=update.effective_chat.id,
             text=message_text,
             parse_mode='Markdown'
-        )
-    except FileNotFoundError:
-        log_error_and_send_message(
-            MESSAGES['no_trade_history'],
-            chat_id=update.effective_chat.id
         )
     except Exception as e:
         log_error_and_send_message(
@@ -357,7 +348,6 @@ async def button_callback_handler(update: Update, context):
 
     callback_data = query.data
     
-    # 콜백 데이터에 따라 해당 명령어 함수를 호출
     if callback_data == "open_orders":
         await open_orders_command(update, context)
     elif callback_data == "positions":
@@ -381,12 +371,11 @@ def main():
     application.add_handler(CommandHandler("price", price_command))
     application.add_handler(CommandHandler("pf", pf_command))
     application.add_handler(CommandHandler("balance", balance_command))
-    application.add_handler(CommandHandler("cancel_all", cancel_all_command)) # ✅ 추가
-    application.add_handler(CommandHandler("history", history_command))       # ✅ 추가
-    application.add_handler(CommandHandler("health", health_command))         # ✅ 추가
-    application.add_handler(CommandHandler("menu", menu_command)) # ✅ 추가
-    application.add_handler(CallbackQueryHandler(button_callback_handler)) # ✅ 추가
-    
+    application.add_handler(CommandHandler("cancel_all", cancel_all_command))
+    application.add_handler(CommandHandler("history", history_command))
+    application.add_handler(CommandHandler("health", health_command))
+    application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(CallbackQueryHandler(button_callback_handler))
     
     print("Telegram bot started...")
     application.run_polling(poll_interval=1)
