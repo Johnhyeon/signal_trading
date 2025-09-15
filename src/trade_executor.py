@@ -5,11 +5,11 @@ import time
 from api_clients import bybit_client, bybit_bot, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message
 from portfolio_manager import record_trade_result
-# 수정: main.py 대신 utils.py에서 메시지 변수 임포트
-from utils import MESSAGES, save_active_orders, log_error_and_send_message
+from utils import MESSAGES, log_error_and_send_message
+from database_manager import get_active_orders, save_active_order, delete_active_order, record_trade_result_db
 
-# 메시지 ID와 주문 정보를 매핑할 전역 딕셔너리
-active_orders = {}
+# 메시지 ID와 주문 정보를 매핑할 전역 딕셔너리 (이제 DB에서 불러와서 사용)
+# active_orders = {} # 이 전역 변수는 이제 사용하지 않습니다.
 
 # 이미 청산 모니터링이 시작된 메시지 ID를 추적하는 set
 monitored_trade_ids = set()
@@ -89,11 +89,10 @@ async def record_trade_result_on_close(symbol, message_id):
                                 'created_at': datetime.fromtimestamp(int(closed_trade_data['createdTime']) / 1000).isoformat()
                             }
                             
-                            record_trade_result(trade_result)
+                            record_trade_result_db(trade_result) # DB에 기록
                             
-                            if message_id in active_orders:
-                                del active_orders[message_id]
-                                print(f"✅ 포지션 청산 완료 후, active_orders에서 {symbol} 주문을 제거했습니다.")
+                            delete_active_order(message_id) # DB에서 삭제
+                            print(f"✅ 포지션 청산 완료 후, active_orders DB에서 {symbol} 주문을 제거했습니다.")
                                 
                             print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
                             await bybit_bot.send_message(
@@ -116,7 +115,7 @@ def execute_bybit_order(order_info, message_id):
     """
     Bybit API를 사용하여 주문을 실행합니다.
     """
-    global active_orders
+    # active_orders 전역 변수 사용 제거
     
     # === 소수점 종목 자동 변환 로직 추가 ===
     original_symbol = order_info['symbol']
@@ -391,8 +390,9 @@ def execute_bybit_order(order_info, message_id):
             position_side = position_data['side']
             position_idx = position_data['positionIdx']
             
-            # ✅ 수정: message_id를 사용하여 딕셔너리에 'fund_percentage'와 'leverage'를 포함하여 포지션 정보 및 orderId를 저장
-            active_orders[message_id] = {
+            # ✅ 수정: DB 저장을 위해 message_id를 포함하여 주문 정보를 딕셔너리에 담음
+            order_data_to_save = {
+                'message_id': message_id,
                 'symbol': order_info['symbol'],
                 'side': position_side,
                 'entry_price': order_info['entry_price'],
@@ -400,10 +400,10 @@ def execute_bybit_order(order_info, message_id):
                 'positionIdx': position_idx,
                 'orderId': bybit_order_id,
                 'fund_percentage': order_info['fund_percentage'],
-                'leverage': order_info['leverage'], # leverage 추가
-                'original_message': order_info['original_message'] # 원본 메시지 텍스트 저장
+                'leverage': order_info['leverage'],
+                'original_message': order_info['original_message']
             }
-            save_active_orders(active_orders) # 추가: 파일에 저장
+            save_active_order(order_data_to_save) # 데이터베이스에 저장
             
             # 텔레그램 요약 메시지 전송
             asyncio.run_coroutine_threadsafe(
@@ -435,8 +435,8 @@ async def cancel_bybit_order(symbol_to_cancel):
     """
     지정된 종목의 미체결 주문을 모두 취소합니다.
     """
-    global active_orders
-
+    # active_orders 전역 변수 사용 제거
+    
     try:
         # Bybit API를 통해 해당 종목의 모든 미체결 주문을 취소합니다.
         cancel_all_result = bybit_client.cancel_all_orders(
@@ -449,12 +449,11 @@ async def cancel_bybit_order(symbol_to_cancel):
                 print(MESSAGES['cancel_all_success'].format(symbol=symbol_to_cancel))
                 await send_bybit_cancel_msg(symbol_to_cancel)
 
-                # active_orders 딕셔너리에서 해당 종목 주문 삭제
-                orders_to_remove = [msg_id for msg_id, order_info in active_orders.items() if order_info['symbol'] == symbol_to_cancel]
+                # ✅ 수정: DB에서 해당 종목 주문 삭제
+                active_orders_from_db = get_active_orders()
+                orders_to_remove = [msg_id for msg_id, order_info in active_orders_from_db.items() if order_info['symbol'] == symbol_to_cancel]
                 for msg_id in orders_to_remove:
-                    del active_orders[msg_id]
-                # ✅ 추가: 파일에 저장
-                save_active_orders(active_orders)
+                    delete_active_order(msg_id)
             else:
                 log_error_and_send_message(
                     MESSAGES['no_open_order_to_cancel'],

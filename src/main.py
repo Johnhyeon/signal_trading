@@ -7,8 +7,12 @@ import os
 from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST_CHANNEL_ID, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message, parse_dca_message
 from portfolio_manager import generate_report
-from trade_executor import execute_bybit_order, active_orders, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2, monitored_trade_ids
-from utils import MESSAGES, load_active_orders, log_error_and_send_message, save_active_orders
+from trade_executor import execute_bybit_order, monitored_trade_ids, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2
+from utils import MESSAGES, log_error_and_send_message
+from database_manager import setup_database, get_active_orders
+
+# 메시지 ID와 주문 정보를 매핑할 전역 딕셔너리
+active_orders = {}
 
 # -----------------
 # 텔레그램 메시지 이벤트 핸들러 (Telethon 클라이언트)
@@ -31,7 +35,9 @@ async def my_event_handler(event):
     order_info = parse_telegram_message(message_text)
     
     if order_info:
-        existing_order = next((v for v in active_orders.values() if v['symbol'] == order_info['symbol'] and v['side'] == order_info['side']), None)
+        # DB에서 최신 활성 주문 정보 불러오기
+        current_active_orders = get_active_orders()
+        existing_order = next((v for v in current_active_orders.values() if v['symbol'] == order_info['symbol'] and v['side'] == order_info['side']), None)
 
         if existing_order:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))
@@ -49,22 +55,24 @@ async def my_event_handler(event):
 
 @client.on(events.MessageEdited(chats=TARGET_CHANNEL_ID))
 async def handle_edited_message(event):
-    global active_orders
     message_id = event.id
     message_text = event.message.message
     print(f"\n{MESSAGES['edited_message_detected']}\n{message_text}")
 
-    if message_id not in active_orders:
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
+
+    if message_id not in current_active_orders:
         return
     
-    if active_orders[message_id]['original_message'] == message_text:
+    if current_active_orders[message_id]['original_message'] == message_text:
         print("⚠️ 메시지 내용이 변경되지 않았으므로 주문 수정 작업을 건너뛰겠습니다.")
         return
 
     print(MESSAGES['edited_message_alert'].format(message_id=message_id))
     
     try:
-        existing_order_info = active_orders.pop(message_id, None)
+        existing_order_info = current_active_orders.pop(message_id, None)
         
         if not existing_order_info:
             print(MESSAGES['order_info_not_found_error'].format(message_id=message_id))
@@ -107,14 +115,16 @@ async def handle_edited_message(event):
 
 @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, func=lambda e: e.is_reply))
 async def handle_dca_and_sl_update(event):
-    global active_orders
     message_text = event.message.message.lower().replace(" ", "")
     original_msg_id = event.reply_to_msg_id
     
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
+
     dca_price, new_sl = parse_dca_message(event.message.message)
     if dca_price and new_sl:
-        if original_msg_id in active_orders:
-            order_info = active_orders[original_msg_id]
+        if original_msg_id in current_active_orders:
+            order_info = current_active_orders[original_msg_id]
             print(MESSAGES['dca_sl_message_detected'].format(symbol=order_info['symbol']))
             await update_stop_loss_to_value(
                 order_info['symbol'],
@@ -139,16 +149,17 @@ async def handle_movesl_command(original_msg_id, target_sl):
     """
     movesl=entry, movesl=tp1, movesl=tp2 메시지를 처리하는 헬퍼 함수
     """
-    global active_orders
-    
-    if original_msg_id not in active_orders:
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
+
+    if original_msg_id not in current_active_orders:
         log_error_and_send_message(
             MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
             chat_id=TELE_BYBIT_LOG_CHAT_ID
         )
         return
         
-    order_info = active_orders[original_msg_id]
+    order_info = current_active_orders[original_msg_id]
     
     # 포지션이 열려있는지 확인
     try:
@@ -173,12 +184,14 @@ async def handle_movesl_command(original_msg_id, target_sl):
 
 @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID, func=lambda e: e.is_reply and 'cancel' in e.message.message.lower()))
 async def handle_cancel_reply(event):
-    global active_orders
     original_msg_id = event.reply_to_msg_id
     print(MESSAGES['cancel_message_detected'].format(original_msg_id=original_msg_id))
     
-    if original_msg_id in active_orders:
-        order_info = active_orders[original_msg_id]
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
+
+    if original_msg_id in current_active_orders:
+        order_info = current_active_orders[original_msg_id]
         symbol = order_info['symbol']
         print(MESSAGES['cancel_message_info'].format(symbol=symbol))
         await cancel_bybit_order(symbol)
@@ -238,11 +251,12 @@ async def my_event_handler(event):
         print(MESSAGES['reply_message_warning'])
         return
     
-
     order_info = parse_telegram_message(message_text)
     
     if order_info:
-        existing_symbol = next((v['symbol'] for v in active_orders.values() if v['symbol'] == order_info['symbol']), None)
+        # DB에서 최신 활성 주문 정보 불러오기
+        current_active_orders = get_active_orders()
+        existing_symbol = next((v['symbol'] for v in current_active_orders.values() if v['symbol'] == order_info['symbol']), None)
 
         if existing_symbol:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))
@@ -262,22 +276,24 @@ async def my_event_handler(event):
 
 @client.on(events.MessageEdited(chats=TEST_CHANNEL_ID))
 async def handle_edited_message(event):
-    global active_orders
     message_id = event.id
     message_text = event.message.message
     print(f"\n{MESSAGES['edited_message_detected']}\n{message_text}")
 
-    if message_id not in active_orders:
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
+
+    if message_id not in current_active_orders:
         return
 
-    if active_orders[message_id]['original_message'] == message_text:
+    if current_active_orders[message_id]['original_message'] == message_text:
         print("⚠️ 메시지 내용이 변경되지 않았으므로 주문 수정 작업을 건너뛰겠습니다.")
         return
 
     print(MESSAGES['edited_message_alert'].format(message_id=message_id))
     
     try:
-        existing_order_info = active_orders.pop(message_id, None)
+        existing_order_info = current_active_orders.pop(message_id, None)
         
         if not existing_order_info:
             print(MESSAGES['order_info_not_found_error'].format(message_id=message_id))
@@ -322,9 +338,11 @@ async def handle_edited_message(event):
 
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID, func=lambda e: e.is_reply))
 async def handle_dca_and_sl_update(event):
-    global active_orders
     message_text = event.message.message.lower().replace(" ", "")
     original_msg_id = event.reply_to_msg_id
+    
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
 
     # ✅ 수정된 로직: 'movesl' 키워드를 정확히 파싱합니다.
     if 'movesltoentry' in message_text:
@@ -336,8 +354,8 @@ async def handle_dca_and_sl_update(event):
 
     dca_price, new_sl = parse_dca_message(event.message.message)
     if dca_price and new_sl:
-        if original_msg_id in active_orders:
-            order_info = active_orders[original_msg_id]
+        if original_msg_id in current_active_orders:
+            order_info = current_active_orders[original_msg_id]
             print(MESSAGES['dca_sl_message_detected'].format(symbol=order_info['symbol']))
             await update_stop_loss_to_value(
                 order_info['symbol'],
@@ -358,16 +376,17 @@ async def handle_movesl_command_test(original_msg_id, target_sl):
     """
     movesl=entry, movesl=tp1, movesl=tp2 메시지를 처리하는 헬퍼 함수
     """
-    global active_orders
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
     
-    if original_msg_id not in active_orders:
+    if original_msg_id not in current_active_orders:
         log_error_and_send_message(
             MESSAGES['order_not_found_message'].format(original_msg_id=original_msg_id),
             chat_id=TELE_BYBIT_LOG_CHAT_ID
         )
         return
         
-    order_info = active_orders[original_msg_id]
+    order_info = current_active_orders[original_msg_id]
     
     # 포지션이 열려있는지 확인
     try:
@@ -405,12 +424,14 @@ async def handle_movesl_command_test(original_msg_id, target_sl):
 
 @client.on(events.NewMessage(chats=TEST_CHANNEL_ID, func=lambda e: e.is_reply and 'cancel' in e.message.message.lower()))
 async def handle_cancel_reply(event):
-    global active_orders
     original_msg_id = event.reply_to_msg_id
     print(MESSAGES['cancel_message_detected'].format(original_msg_id=original_msg_id))
     
-    if original_msg_id in active_orders:
-        order_info = active_orders[original_msg_id]
+    # DB에서 최신 활성 주문 정보 불러오기
+    current_active_orders = get_active_orders()
+
+    if original_msg_id in current_active_orders:
+        order_info = current_active_orders[original_msg_id]
         symbol = order_info['symbol']
         print(MESSAGES['cancel_message_info'].format(symbol=symbol))
         await cancel_bybit_order(symbol)
@@ -437,7 +458,13 @@ async def handle_cancel_reply(event):
 
 async def main():
     try:
-        loaded_orders = load_active_orders()
+        # ✅ 추가: DB 설정 함수 호출
+        setup_database()
+        print("✅ 데이터베이스 설정 완료.")
+        
+        # ✅ 수정: 파일에서 불러오는 대신 DB에서 불러오기
+        global active_orders
+        loaded_orders = get_active_orders()
         active_orders.update(loaded_orders)
         for message_id in active_orders.keys():
             monitored_trade_ids.add(message_id)
