@@ -4,10 +4,6 @@ from datetime import datetime, timedelta
 from utils import MESSAGES
 from database_manager import record_trade_result_db, get_db_connection
 
-# 거래 기록을 저장할 파일 경로
-LOG_DIR = os.path.join("..", "log")
-TRADE_LOG_FILE = os.path.join(LOG_DIR, "trade_log.json")
-
 def record_trade_result(trade_data):
     """
     거래 결과를 데이터베이스에 기록합니다.
@@ -55,12 +51,13 @@ def generate_report(period='all'):
     win_trades = sum(1 for log in logs if log['pnl'] > 0)
     total_trades = len(logs)
     win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
+    print("running")
     
     report_message = (
-        MESSAGES['report_title'].format(period=period.capitalize()) + "\n\n"
+        f"{MESSAGES['report_title'].format(period=period.capitalize())}\n\n"
         f"{MESSAGES['report_total_trades'].format(total_trades=total_trades)}\n"
         f"{MESSAGES['report_total_pnl'].format(total_pnl=total_pnl)}\n"
-        f"{MESSAGES['report_win_rate'].format(win_rate=win_rate):.2f}%\n"
+        f"{MESSAGES['report_win_rate'].format(win_rate=win_rate)}%\n"
     )
     
     # 콘솔에 리포트 내용 출력
