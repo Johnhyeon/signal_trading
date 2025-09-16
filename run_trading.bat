@@ -1,9 +1,9 @@
 @echo off
 rem C:\Users\DRIMAES\Desktop\myproject\signal_trading 경로로 이동
-cd "C:\Users\DRIMAES\Desktop\myproject\signal_trading"
+cd "C:\Users\DRIMAES\Desktop\myproject\signal_trading_refactoring"
 
 rem 'trading' 가상환경 활성화 (Python 가상환경의 Scripts 폴더 경로)
-call "C:\Users\DRIMAES\Desktop\myproject\signal_trading\trading\Scripts\activate"
+call "C:\Users\DRIMAES\Desktop\myproject\signal_trading_refactoring\trading\Scripts\activate"
 
 rem src 디렉토리로 이동
 cd src

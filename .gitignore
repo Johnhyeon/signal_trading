@@ -12,3 +12,7 @@ test.py
 
 trading/
 log/
+
+*.png
+*.bat
+*.sh
