@@ -51,11 +51,11 @@ def setup_database():
                 side TEXT NOT NULL,
                 entry_price REAL,
                 targets TEXT,
-                positionIdx TEXT,
                 orderId TEXT,
                 fund_percentage REAL,
                 leverage REAL,
-                original_message TEXT
+                original_message TEXT,
+                filled BOOLEAN NOT NULL CHECK (filled IN (0, 1)) DEFAULT 0
             )
         ''')
         
@@ -67,17 +67,29 @@ def save_active_order(order_info):
     with db_lock:
         conn = get_db_connection()
         cursor = conn.cursor()
+        # ✅ 수정: filled 컬럼 추가
         cursor.execute('''
             INSERT OR REPLACE INTO active_orders (
                 message_id, symbol, side, entry_price, targets,
-                positionIdx, orderId, fund_percentage, leverage, original_message
+                orderId, fund_percentage, leverage, original_message, filled
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             order_info['message_id'], order_info['symbol'], order_info['side'],
             order_info['entry_price'], str(order_info['targets']),
-            order_info['positionIdx'], order_info['orderId'],
-            order_info['fund_percentage'], order_info['leverage'], order_info['original_message']
+            order_info['orderId'], order_info['fund_percentage'], order_info['leverage'],
+            order_info['original_message'], order_info['filled']
         ))
+        conn.commit()
+        conn.close()
+
+def update_filled_status(message_id, status):
+    """주문의 'filled' 상태를 업데이트합니다."""
+    with db_lock:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE active_orders SET filled = ? WHERE message_id = ?
+        ''', (status, message_id))
         conn.commit()
         conn.close()
 

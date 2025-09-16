@@ -5,8 +5,7 @@ from utils import MESSAGES
 from database_manager import record_trade_result_db, get_db_connection
 
 # 거래 기록을 저장할 파일 경로
-LOG_DIR = os.path.join("..", "log")
-TRADE_LOG_FILE = os.path.join(LOG_DIR, "trade_log.json")
+# TRADE_LOG_FILE 변수는 이제 사용되지 않습니다.
 
 def record_trade_result(trade_data):
     """

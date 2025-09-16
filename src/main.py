@@ -37,7 +37,7 @@ async def my_event_handler(event):
     if order_info:
         # DB에서 최신 활성 주문 정보 불러오기
         current_active_orders = get_active_orders()
-        existing_order = next((v for v in current_active_orders.values() if v['symbol'] == order_info['symbol'] and v['side'] == order_info['side']), None)
+        existing_order = next((v for v in current_active_orders.values() if v['symbol'] == order_info['symbol'] and v['side'] == order_info['side'] and not v['filled']), None)
 
         if existing_order:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))

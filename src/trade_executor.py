@@ -91,8 +91,9 @@ async def record_trade_result_on_close(symbol, message_id):
                             
                             record_trade_result_db(trade_result) # DB에 기록
                             
-                            delete_active_order(message_id) # DB에서 삭제
-                            print(f"✅ 포지션 청산 완료 후, active_orders DB에서 {symbol} 주문을 제거했습니다.")
+                            # ✅ 수정: filled 컬럼을 True로 업데이트
+                            update_filled_status(message_id, True)
+                            print(f"✅ 포지션 청산 완료 후, active_orders DB의 {symbol} 주문을 filled=True로 업데이트했습니다.")
                                 
                             print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
                             await bybit_bot.send_message(
@@ -396,15 +397,14 @@ def execute_bybit_order(order_info, message_id):
             order_data_to_save = {
                 'message_id': message_id,
                 'symbol': order_info['symbol'],
-                'side': order_info['side'], # ✅ 이 부분을 이렇게 변경합니다.
+                'side': order_info['side'], 
                 'entry_price': order_info['entry_price'],
                 'targets': order_info['targets'],
-                # 나머지 필드는 그대로 유지
-                'positionIdx': None, # 체결되지 않았으므로 None으로 설정
                 'orderId': bybit_order_id,
                 'fund_percentage': order_info['fund_percentage'],
                 'leverage': order_info['leverage'],
-                'original_message': order_info['original_message']
+                'original_message': order_info['original_message'],
+                'filled': False
             }
             save_active_order(order_data_to_save) # 데이터베이스에 저장
             
