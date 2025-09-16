@@ -140,3 +140,13 @@ def parse_dca_message(message_text):
     except Exception as e:
         print(MESSAGES['parsing_error'], e)
         return None, None
+    
+def parse_close_all_positions(message_text):
+    """
+    'Close all positions' 또는 'Take all profit now' 메시지를 파싱합니다.
+    """
+    normalized_text = message_text.lower().strip()
+    # 'close all positions', 'take all profit now', 'close all' 등 다양한 변형을 고려
+    if "close all" in normalized_text or "take all profit" in normalized_text:
+        return True
+    return False

@@ -5,9 +5,9 @@ import telegram
 import os
 
 from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST_CHANNEL_ID, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
-from message_parser import parse_telegram_message, parse_cancel_message, parse_dca_message
+from message_parser import parse_telegram_message, parse_cancel_message, parse_dca_message, parse_close_all_positions 
 from portfolio_manager import generate_report
-from trade_executor import execute_bybit_order, monitored_trade_ids, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2
+from trade_executor import close_all_positions, execute_bybit_order, monitored_trade_ids, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2
 from utils import MESSAGES, log_error_and_send_message
 from database_manager import setup_database, get_active_orders
 
@@ -22,6 +22,11 @@ async def my_event_handler(event):
     
     message_text = event.message.message
     print(f"\n{MESSAGES['new_message_detected']}\n{message_text}")
+
+    # ✅ 추가: 'Close all positions' 메시지 감지
+    if parse_close_all_positions(message_text):
+        await close_all_positions()
+        return # 모든 포지션 청산 후 종료
 
     if event.is_reply:
         print(MESSAGES['reply_message_warning'])
@@ -225,6 +230,11 @@ async def my_event_handler(event):
 
     message_text = event.message.message
     print(f"\n새로운 메시지 감지:\n{message_text}")
+
+    # ✅ 추가: 'Close all positions' 메시지 감지
+    if parse_close_all_positions(message_text):
+        await close_all_positions()
+        return # 모든 포지션 청산 후 종료
 
     # ✅ 'PF' 메시지 감지 및 포트폴리오 리포트 전송
     message_parts = message_text.strip().lower().split()

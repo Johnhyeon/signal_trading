@@ -6,7 +6,7 @@ from api_clients import bybit_client, bybit_bot, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message
 from portfolio_manager import record_trade_result
 from utils import MESSAGES, log_error_and_send_message
-from database_manager import get_active_orders, save_active_order, delete_active_order, record_trade_result_db
+from database_manager import get_active_orders, save_active_order, delete_active_order, record_trade_result_db, update_filled_status
 
 # 메시지 ID와 주문 정보를 매핑할 전역 딕셔너리 (이제 DB에서 불러와서 사용)
 # active_orders = {} # 이 전역 변수는 이제 사용하지 않습니다.
@@ -408,6 +408,14 @@ def execute_bybit_order(order_info, message_id):
             }
             save_active_order(order_data_to_save) # 데이터베이스에 저장
             
+
+            # ✅ 수정: 청산 모니터링을 위한 비동기 함수 시작
+            print(MESSAGES['monitor_position_close'].format(symbol=order_info['symbol']))
+            asyncio.run_coroutine_threadsafe(
+                record_trade_result_on_close(order_info['symbol'], message_id),
+                asyncio.get_event_loop()
+            )
+
             # 텔레그램 요약 메시지 전송
             asyncio.run_coroutine_threadsafe(
                 send_bybit_summary_msg(order_info, adjusted_qty, order_result),
@@ -424,15 +432,6 @@ def execute_bybit_order(order_info, message_id):
         log_error_and_send_message(
             f"{MESSAGES['order_failed']} {order_result['retMsg']}"
         )
-
-            # ✅ 포지션 청산 모니터링 시작 (message_id 전달)
-        if message_id not in monitored_trade_ids:
-            monitored_trade_ids.add(message_id) # 모니터링 시작
-            asyncio.run_coroutine_threadsafe(
-                record_trade_result_on_close(order_info['symbol'], message_id),
-                asyncio.get_event_loop()
-            )
-            
 
 async def cancel_bybit_order(symbol_to_cancel):
     """
@@ -672,3 +671,50 @@ def place_dca_order(order_info, dca_price):
             MESSAGES['dca_order_fail'].format(error_msg=e),
             exc=e
         )
+
+async def close_all_positions():
+    """
+    모든 활성 포지션을 청산합니다.
+    """
+    print("모든 포지션을 청산합니다...")
+    try:
+        # 1. 모든 활성 포지션 조회
+        # ✅ 수정: settleCoin='USDT' 파라미터를 추가하여 오류 해결
+        positions_info = bybit_client.get_positions(category="linear", settleCoin="USDT")
+        
+        if positions_info['retCode'] != 0 or not positions_info['result']['list']:
+            log_error_and_send_message("활성 포지션이 없습니다.", chat_id=TELE_BYBIT_LOG_CHAT_ID)
+            return
+
+        active_positions = [p for p in positions_info['result']['list'] if float(p['size']) > 0]
+
+        if not active_positions:
+            log_error_and_send_message("청산할 포지션이 없습니다.", chat_id=TELE_BYBIT_LOG_CHAT_ID)
+            return
+
+        for position in active_positions:
+            symbol = position['symbol']
+            side = "Sell" if position['side'] == "Buy" else "Buy" # 반대 방향 주문
+            qty = position['size']
+            
+            print(f"✅ {symbol} 포지션 청산 주문 실행: {qty} {side}")
+
+            # 2. 시장가로 청산 주문 실행
+            bybit_client.place_order(
+                category="linear",
+                symbol=symbol,
+                side=side,
+                orderType="Market",
+                qty=qty,
+                reduceOnly=True # 이 주문은 포지션 청산만 가능하도록 설정
+            )
+            print(f"✅ {symbol} 포지션 청산 주문 성공.")
+        
+        # 3. 텔레그램으로 완료 메시지 전송
+        await bybit_bot.send_message(
+            chat_id=TELE_BYBIT_LOG_CHAT_ID,
+            text="✅ 모든 활성 포지션이 성공적으로 청산되었습니다."
+        )
+
+    except Exception as e:
+        log_error_and_send_message(f"모든 포지션을 청산하는 중 오류 발생: {e}", exc=e)
