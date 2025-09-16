@@ -70,9 +70,8 @@ def parse_telegram_message(message_text):
         
         if 'xx' in entry_price_str:
             base_price_str = entry_price_str.replace('xx', '')
-            base_price = int(base_price_str)
-            random_digits = random.randint(0, 99)
-            entry_price = float(base_price * 100 + random_digits)
+            random_digits_str = str(random.randint(0, 99)).zfill(2)
+            entry_price = float(f"{base_price_str}{random_digits_str}")
         elif entry_price_str.endswith('x'):
             if '.' in entry_price_str:
                 base_price_str = entry_price_str.replace('x', '')
