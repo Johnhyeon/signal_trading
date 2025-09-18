@@ -38,6 +38,7 @@ def setup_database(conn):
                 exit_price REAL,
                 qty REAL,
                 pnl REAL,
+                fee REAL,
                 created_at TEXT NOT NULL
             )
         ''')
@@ -97,9 +98,11 @@ def delete_active_order(conn, message_id):
 def get_active_orders(conn):
     """데이터베이스에서 모든 활성 주문 정보를 불러옵니다."""
     with db_lock:
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM active_orders')
         rows = cursor.fetchall()
+        conn.close()
     
     # Dict 형태로 변환하여 반환
     orders = {}
@@ -114,11 +117,11 @@ def record_trade_result_db(conn, trade_data):
     with db_lock:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO trade_log (symbol, side, entry_price, exit_price, qty, pnl, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO trade_log (symbol, side, entry_price, exit_price, qty, pnl, fee, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             trade_data['symbol'], trade_data['side'], trade_data['entry_price'],
             trade_data['exit_price'], trade_data['qty'], trade_data['pnl'],
-            trade_data['created_at']
+            trade_data['fee'], trade_data['created_at']
         ))
         conn.commit()
