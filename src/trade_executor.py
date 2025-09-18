@@ -49,7 +49,7 @@ async def send_bybit_cancel_msg(symbol):
         parse_mode='Markdown'
     )
 
-async def record_trade_result_on_close(conn, symbol, message_id, bybit_order_id): # ✅ db_conn 인자 추가
+async def record_trade_result_on_close(conn, symbol, message_id, bybit_order_id):
     """
     포지션이 청산될 때까지 모니터링하고, 청산되면 거래 결과를 기록합니다.
     """
@@ -71,8 +71,8 @@ async def record_trade_result_on_close(conn, symbol, message_id, bybit_order_id)
                     if is_position_open and float(position['size']) == 0:
                         print(MESSAGES['position_closed_success'].format(symbol=symbol))
                         
-                        # ✅ 수정: 원하는 orderId를 찾을 때까지 반복 시도
-                        for _ in range(10): # 최대 10회 (약 20초) 시도
+                        # ✅ 수정: 원하는 orderId를 찾을 때까지 반복 시도 (횟수, 대기 시간 증가)
+                        for _ in range(30): # 최대 30회 (약 60초) 시도
                             closed_pnl_info = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=5)
                             
                             if closed_pnl_info['retCode'] == 0 and closed_pnl_info['result']['list']:
@@ -84,6 +84,12 @@ async def record_trade_result_on_close(conn, symbol, message_id, bybit_order_id)
 
                                 if closed_trade_data:
                                     print(f"✅ 일치하는 거래 기록({bybit_order_id})을 찾았습니다.")
+                                    
+                                    # ✅ 추가: 수수료 정보 추출 및 계산
+                                    open_fee = float(closed_trade_data.get('openFee', 0))
+                                    close_fee = float(closed_trade_data.get('closeFee', 0))
+                                    total_fee = open_fee + close_fee
+
                                     trade_result = {
                                         'symbol': closed_trade_data['symbol'],
                                         'side': closed_trade_data['side'],
@@ -91,11 +97,12 @@ async def record_trade_result_on_close(conn, symbol, message_id, bybit_order_id)
                                         'exit_price': float(closed_trade_data['avgExitPrice']),
                                         'qty': float(closed_trade_data['closedSize']),
                                         'pnl': float(closed_trade_data['closedPnl']),
+                                        'fee': total_fee,
                                         'created_at': datetime.fromtimestamp(int(closed_trade_data['createdTime']) / 1000).isoformat()
                                     }
                                     
-                                    record_trade_result_db(conn, trade_result) # ✅ conn 인자 전달
-                                    update_filled_status(conn, message_id, True) # ✅ conn 인자 전달
+                                    record_trade_result_db(conn, trade_result)
+                                    update_filled_status(conn, message_id, True)
                                     print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
                                     await bybit_bot.send_message(
                                         chat_id=TELE_BYBIT_LOG_CHAT_ID,
@@ -124,7 +131,7 @@ async def record_trade_result_on_close(conn, symbol, message_id, bybit_order_id)
         if message_id in monitored_trade_ids:
             monitored_trade_ids.remove(message_id)
 
-def execute_bybit_order(conn, order_info, message_id): # ✅ db_conn 인자 추가
+def execute_bybit_order(conn, order_info, message_id):
     """
     Bybit API를 사용하여 주문을 실행합니다.
     """
@@ -418,13 +425,13 @@ def execute_bybit_order(conn, order_info, message_id): # ✅ db_conn 인자 추�
                 'original_message': order_info['original_message'],
                 'filled': False
             }
-            save_active_order(conn, order_data_to_save) # ✅ conn 인자 전달
+            save_active_order(conn, order_data_to_save)
             
 
             # ✅ 수정: 청산 모니터링을 위한 비동기 함수 시작
             print(MESSAGES['monitor_position_close'].format(symbol=order_info['symbol']))
             asyncio.run_coroutine_threadsafe(
-                record_trade_result_on_close(conn, order_info['symbol'], message_id, bybit_order_id), # ✅ conn 인자 전달
+                record_trade_result_on_close(conn, order_info['symbol'], message_id, bybit_order_id),
                 asyncio.get_event_loop()
             )
 
@@ -445,7 +452,7 @@ def execute_bybit_order(conn, order_info, message_id): # ✅ db_conn 인자 추�
             f"{MESSAGES['order_failed']} {order_result['retMsg']}"
         )
 
-async def cancel_bybit_order(conn, symbol_to_cancel): # ✅ db_conn 인자 추가
+async def cancel_bybit_order(conn, symbol_to_cancel):
     """
     지정된 종목의 미체결 주문을 모두 취소합니다.
     """
@@ -464,10 +471,10 @@ async def cancel_bybit_order(conn, symbol_to_cancel): # ✅ db_conn 인자 추�
                 await send_bybit_cancel_msg(symbol_to_cancel)
 
                 # ✅ 수정: DB에서 해당 종목 주문 삭제
-                active_orders_from_db = get_active_orders(conn) # ✅ conn 인자 전달
+                active_orders_from_db = get_active_orders(conn)
                 orders_to_remove = [msg_id for msg_id, order_info in active_orders_from_db.items() if order_info['symbol'] == symbol_to_cancel]
                 for msg_id in orders_to_remove:
-                    delete_active_order(conn, msg_id) # ✅ conn 인자 전달
+                    delete_active_order(conn, msg_id)
             else:
                 log_error_and_send_message(
                     MESSAGES['no_open_order_to_cancel'],
@@ -639,7 +646,7 @@ async def update_stop_loss_to_value(symbol, side, position_idx, new_sl_price):
         )
 
 # DCA 주문을 실행하는 함수
-def place_dca_order(conn, order_info, dca_price): # ✅ db_conn 인자 추가
+def place_dca_order(conn, order_info, dca_price):
     """
     DCA (Dollar-Cost Averaging) 주문을 실행합니다.
     """
@@ -684,7 +691,7 @@ def place_dca_order(conn, order_info, dca_price): # ✅ db_conn 인자 추가
             exc=e
         )
 
-async def close_all_positions(conn): # ✅ db_conn 인자 추가
+async def close_all_positions(conn):
     """
     모든 활성 포지션을 청산합니다.
     """
