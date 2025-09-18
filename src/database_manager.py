@@ -9,7 +9,7 @@ load_dotenv()
 # 환경 변수에서 DB 경로 가져오기
 GDRIVE_PATH = os.getenv('GDRIVE_PATH')
 print(f"GDRIVE_PATH: {GDRIVE_PATH}")
-DB_PATH = os.path.join(GDRIVE_PATH, 'trading_bot.db')
+DB_PATH = os.path.join(GDRIVE_PATH, 'trading_bot_test.db')
 print(f"DB_PATH: {DB_PATH}")
 
 # ✅ 데이터베이스 접근을 위한 전역 Lock 객체 생성
@@ -23,10 +23,9 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def setup_database():
+def setup_database(conn):
     """데이터베이스 테이블을 생성합니다."""
     with db_lock:
-        conn = get_db_connection()
         cursor = conn.cursor()
         
         # trade_log 테이블: 거래 기록
@@ -60,12 +59,10 @@ def setup_database():
         ''')
         
         conn.commit()
-        conn.close()
 
-def save_active_order(order_info):
+def save_active_order(conn, order_info):
     """활성 주문 정보를 데이터베이스에 저장합니다."""
     with db_lock:
-        conn = get_db_connection()
         cursor = conn.cursor()
         # ✅ 수정: filled 컬럼 추가
         cursor.execute('''
@@ -80,36 +77,29 @@ def save_active_order(order_info):
             order_info['original_message'], order_info['filled']
         ))
         conn.commit()
-        conn.close()
 
-def update_filled_status(message_id, status):
+def update_filled_status(conn, message_id, status):
     """주문의 'filled' 상태를 업데이트합니다."""
     with db_lock:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             UPDATE active_orders SET filled = ? WHERE message_id = ?
         ''', (status, message_id))
         conn.commit()
-        conn.close()
 
-def delete_active_order(message_id):
+def delete_active_order(conn, message_id):
     """활성 주문 정보를 데이터베이스에서 삭제합니다."""
     with db_lock:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('DELETE FROM active_orders WHERE message_id = ?', (message_id,))
         conn.commit()
-        conn.close()
 
-def get_active_orders():
+def get_active_orders(conn):
     """데이터베이스에서 모든 활성 주문 정보를 불러옵니다."""
     with db_lock:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT * FROM active_orders')
         rows = cursor.fetchall()
-        conn.close()
     
     # Dict 형태로 변환하여 반환
     orders = {}
@@ -119,10 +109,9 @@ def get_active_orders():
         orders[order_info['message_id']] = order_info
     return orders
 
-def record_trade_result_db(trade_data):
+def record_trade_result_db(conn, trade_data):
     """거래 결과를 데이터베이스에 기록합니다."""
     with db_lock:
-        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO trade_log (symbol, side, entry_price, exit_price, qty, pnl, created_at)
@@ -133,9 +122,3 @@ def record_trade_result_db(trade_data):
             trade_data['created_at']
         ))
         conn.commit()
-        conn.close()
-
-
-if __name__ == "__main__":
-    setup_database()
-    print("Database setup completed.")

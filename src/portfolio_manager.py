@@ -4,12 +4,12 @@ from datetime import datetime, timedelta
 from utils import MESSAGES
 from database_manager import record_trade_result_db, get_db_connection
 
-def record_trade_result(trade_data):
+def record_trade_result(conn, trade_data): # ✅ conn 인자 추가
     """
     거래 결과를 데이터베이스에 기록합니다.
     """
     try:
-        record_trade_result_db(trade_data)
+        record_trade_result_db(conn, trade_data) # ✅ conn 인자 전달
 
         # 콘솔에 이번 거래 로그 출력
         print("\n" + "="*30)
@@ -23,12 +23,11 @@ def record_trade_result(trade_data):
         print(f"⚠️ 거래 기록을 데이터베이스에 저장하는 중 오류 발생: {e}")
 
 
-def generate_report(period='all'):
+def generate_report(conn, period='all'): # ✅ conn 인자 추가
     """
     거래 기록을 기반으로 통계 리포트를 생성합니다.
     period: 'all' (전체), 'daily', 'weekly' 등
     """
-    conn = get_db_connection()
     cursor = conn.cursor()
     
     query = "SELECT * FROM trade_log"
@@ -42,7 +41,6 @@ def generate_report(period='all'):
 
     cursor.execute(query)
     logs = cursor.fetchall()
-    conn.close()
 
     if not logs:
         return MESSAGES['no_trades_in_period']
