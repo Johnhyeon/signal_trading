@@ -9,7 +9,7 @@ load_dotenv()
 # 환경 변수에서 DB 경로 가져오기
 GDRIVE_PATH = os.getenv('GDRIVE_PATH')
 print(f"GDRIVE_PATH: {GDRIVE_PATH}")
-DB_PATH = os.path.join(GDRIVE_PATH, 'trading_bot_test.db')
+DB_PATH = os.path.join(GDRIVE_PATH, 'trading_bot.db')
 print(f"DB_PATH: {DB_PATH}")
 
 # ✅ 데이터베이스 접근을 위한 전역 Lock 객체 생성
