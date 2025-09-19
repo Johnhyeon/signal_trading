@@ -153,7 +153,10 @@ async def pf_command(update: Update, context):
             elif message_parts[0] == 'day':
                 period = 'day'
         
-        report = generate_report(period=period)
+        conn = get_db_connection()
+        report = generate_report(conn, period=period)
+        conn.close()
+
         await bybit_bot.send_message(
             chat_id=update.effective_chat.id,
             text=report,
