@@ -352,44 +352,51 @@ async def pnl_add_command(update: Update, context):
             return
 
         symbol = context.args[0].upper() + 'USDT'
+        # Bybit API에서 최근 50개의 closed order 기록을 가져옵니다.
         response = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=5)
 
         if response['retCode'] == 0 and response['result']['list']:
             records = response['result']['list']
-            keyboard = []
             
-            # 봇 메모리(context.user_data)에 임시로 기록 저장
+            # --- 수정된 부분: 
+            # 봇 메모리(context.user_data)에 전체 기록과 사용자의 선택 리스트를 초기화합니다.
             context.user_data['pnl_records'] = records
+            context.user_data['selected_orders'] = []
 
+            keyboard = []
             for idx, record in enumerate(records):
                 pnl = float(record['closedPnl'])
+                qty = float(record['closedSize'])
                 created_time = datetime.fromtimestamp(int(record['createdTime']) / 1000).strftime('%m-%d %H:%M')
-                button_text = f"PNL: {pnl:.2f} | {created_time}"
                 
-                # 콜백 데이터에는 인덱스와 액션만 담습니다.
-                callback_data = json.dumps({'a': 'add_pnl', 'idx': idx})
+                # 버튼 텍스트: PNL, 수량, 시간
+                button_text = f"PNL: {pnl:.2f} | QTY: {qty:.4f} | {created_time}"
                 
+                # 콜백 데이터: 액션과 기록의 인덱스만 포함 (64바이트 제한 회피)
+                callback_data = json.dumps({'a': 'select_pnl', 'idx': idx})
                 keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
             
             if keyboard:
+                # '완료' 버튼을 추가합니다.
+                keyboard.append([InlineKeyboardButton("✅ 선택 완료 및 저장", callback_data='{"a": "complete_pnl"}')])
+                
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 await bybit_bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=f"📊 **{symbol}**의 최근 청산 기록입니다. DB에 저장할 기록을 선택하세요:",
+                    text=f"📊 **{symbol}**의 최근 청산 주문 목록입니다.\nDB에 저장할 주문을 선택하세요:",
                     reply_markup=reply_markup,
                     parse_mode='Markdown'
                 )
             else:
                 await bybit_bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text="⚠️ 청산 기록을 찾을 수 없습니다."
+                    text="⚠️ 선택 가능한 기록이 없습니다."
                 )
         else:
             await bybit_bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=f"⚠️ 종목 '{symbol}'의 청산 기록을 찾을 수 없습니다."
             )
-
     except Exception as e:
         log_error_and_send_message(f"오류 발생: {e}", exc=e, chat_id=update.effective_chat.id)
 
@@ -398,46 +405,90 @@ async def button_callback_handler(update: Update, context):
     await query.answer()
 
     callback_data = query.data
-    data = json.loads(callback_data)
+    data = json.loads(query.data)
     action = data.get('a')
 
-    if action == "add_pnl":
+    # 개별 주문 선택/취소 로직
+    if action == "select_pnl":
         idx = data.get('idx')
-        
-        # 메모리(context.user_data)에서 기록을 불러옵니다.
-        records = context.user_data.get('pnl_records', [])
-        
-        if idx is not None and len(records) > idx:
-            record = records[idx]
-            conn = get_db_connection()
-            try:
-                # DB 저장에 필요한 데이터로 변환
-                trade_data = {
-                    'symbol': record['symbol'],
-                    'side': record['side'],
-                    'entry_price': float(record['avgEntryPrice']),
-                    'exit_price': float(record['avgExitPrice']),
-                    'qty': float(record['closedSize']),
-                    'pnl': float(record['closedPnl']),
-                    'fee': float(record.get('openFee', 0)) + float(record.get('closeFee', 0)),
-                    'created_at': datetime.fromtimestamp(int(record['createdTime']) / 1000).isoformat()
-                }
-                
-                record_trade_result_db(conn, trade_data)
-                
-                # 성공 메시지
-                await query.edit_message_text(text=f"✅ PNL 기록이 DB에 성공적으로 저장되었습니다:\n`{trade_data['symbol']}` - `{trade_data['pnl']:.2f}` USDT")
-                
-                # 저장 후 메모리에서 기록 삭제 (선택 사항)
-                if 'pnl_records' in context.user_data:
-                    del context.user_data['pnl_records']
+        pnl_records = context.user_data.get('pnl_records', [])
+        selected_orders = context.user_data.get('selected_orders', [])
 
-            except Exception as e:
-                log_error_and_send_message(f"DB 저장 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
-            finally:
-                conn.close()
-        else:
-            await query.edit_message_text(text="⚠️ 해당 기록을 찾을 수 없습니다. 다시 시도해주세요.")
+        if idx is not None and len(pnl_records) > idx:
+            record_id = pnl_records[idx]['orderId']
+            
+            # 선택 토글
+            if record_id in selected_orders:
+                selected_orders.remove(record_id)
+            else:
+                selected_orders.append(record_id)
+
+            context.user_data['selected_orders'] = selected_orders
+            
+            # 버튼 텍스트 업데이트 (선택 여부 표시)
+            updated_keyboard = []
+            for r_idx, record in enumerate(pnl_records):
+                pnl = float(record['closedPnl'])
+                qty = float(record['closedSize'])
+                created_time = datetime.fromtimestamp(int(record['createdTime']) / 1000).strftime('%m-%d %H:%M')
+                
+                prefix = "✅ " if record['orderId'] in selected_orders else ""
+                button_text = f"{prefix}PNL: {pnl:.2f} | QTY: {qty:.4f} | {created_time}"
+                
+                callback_data = json.dumps({'a': 'select_pnl', 'idx': r_idx})
+                updated_keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+            # 완료 버튼 다시 추가
+            updated_keyboard.append([InlineKeyboardButton("✅ 선택 완료 및 저장", callback_data='{"a": "complete_pnl"}')])
+            
+            reply_markup = InlineKeyboardMarkup(updated_keyboard)
+            await query.edit_message_reply_markup(reply_markup=reply_markup)
+            
+    # 선택 완료 및 저장 로직
+    elif action == "complete_pnl":
+        pnl_records = context.user_data.get('pnl_records', [])
+        selected_order_ids = context.user_data.get('selected_orders', [])
+
+        if not selected_order_ids:
+            await query.edit_message_text(text="⚠️ 저장할 기록을 선택하지 않았습니다. 다시 시도해주세요.")
+            return
+
+        # 선택된 주문들의 전체 기록을 가져옵니다.
+        selected_records = [rec for rec in pnl_records if rec['orderId'] in selected_order_ids]
+        
+        # 합산 함수 호출
+        aggregated_data = aggregate_selected_orders(selected_records)
+
+        conn = get_db_connection()
+        try:
+            # DB 저장에 필요한 데이터로 변환 (aggregate_selected_orders 함수에서 반환되는 포맷에 맞춤)
+            trade_data = {
+                'symbol': aggregated_data['symbol'],
+                'side': aggregated_data['side'],
+                'entry_price': aggregated_data['entry_price'],
+                'exit_price': aggregated_data['exit_price'],
+                'qty': aggregated_data['qty'],
+                'pnl': aggregated_data['pnl'],
+                'fee': aggregated_data['fee'],
+                'created_at': datetime.fromtimestamp(aggregated_data['created_at'] / 1000).isoformat()
+            }
+            
+            record_trade_result_db(conn, trade_data)
+            
+            await query.edit_message_text(
+                text=f"✅ 선택된 {len(selected_order_ids)}개 주문이 하나의 PNL 기록으로 DB에 저장되었습니다:\n`{trade_data['symbol']}` - `{trade_data['pnl']:.2f}` USDT"
+            )
+            
+            # 저장 후 메모리에서 임시 기록 삭제
+            if 'pnl_records' in context.user_data:
+                del context.user_data['pnl_records']
+            if 'selected_orders' in context.user_data:
+                del context.user_data['selected_orders']
+
+        except Exception as e:
+            log_error_and_send_message(f"DB 저장 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
+        finally:
+            conn.close()
     elif callback_data == "open_orders":
         await open_orders_command(update, context)
     elif callback_data == "positions":
@@ -452,6 +503,49 @@ async def button_callback_handler(update: Update, context):
         await health_command(update, context)
     elif callback_data == "cancel_all":
         await cancel_all_command(update, context)
+
+def aggregate_selected_orders(records):
+    """
+    선택된 closed order 기록들을 입력받아 하나의 합산된 포지션으로 반환합니다.
+    """
+    if not records:
+        return None
+    
+    # 첫 번째 기록을 기준으로 기본 데이터 설정
+    first_record = records[0]
+    total_pnl = 0.0
+    total_qty = 0.0
+    total_fee = 0.0
+    total_entry_value = 0.0
+    total_exit_value = 0.0
+    latest_created_time = 0
+    
+    for record in records:
+        total_pnl += float(record['closedPnl'])
+        total_qty += float(record['closedSize'])
+        total_fee += float(record.get('openFee', 0)) + float(record.get('closeFee', 0))
+        total_entry_value += float(record.get('cumEntryValue', 0))
+        total_exit_value += float(record.get('cumExitValue', 0))
+        latest_created_time = max(latest_created_time, int(record['createdTime']))
+    
+    # 최종 결과 계산
+    aggregated_data = {
+        'symbol': first_record['symbol'],
+        'side': first_record['side'],
+        'qty': total_qty,
+        'pnl': total_pnl,
+        'fee': total_fee,
+        'created_at': latest_created_time,
+    }
+    
+    if total_qty > 0:
+        aggregated_data['entry_price'] = total_entry_value / total_qty
+        aggregated_data['exit_price'] = total_exit_value / total_qty
+    else:
+        aggregated_data['entry_price'] = 0.0
+        aggregated_data['exit_price'] = 0.0
+
+    return aggregated_data
 
 def main():
     application = Application.builder().token(TELE_BYBIT_BOT_TOKEN).build()
