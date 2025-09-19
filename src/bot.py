@@ -5,9 +5,8 @@ import os
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
-from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
+from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN
 from portfolio_manager import generate_report
-from trade_executor import send_bybit_summary_msg
 from utils import MESSAGES, log_error_and_send_message
 from database_manager import get_active_orders, get_db_connection, record_trade_result_db, update_filled_status
 

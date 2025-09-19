@@ -3,6 +3,7 @@ from datetime import datetime
 import decimal
 import time
 from api_clients import bybit_client, bybit_bot, TELE_BYBIT_LOG_CHAT_ID
+from data_processor import aggregate_closed_positions
 from message_parser import parse_telegram_message, parse_cancel_message
 from portfolio_manager import record_trade_result
 from utils import MESSAGES, log_error_and_send_message
@@ -51,95 +52,77 @@ async def send_bybit_cancel_msg(symbol):
 
 async def record_trade_result_on_close(conn, symbol, message_id):
     """
-    포지션이 청산될 때까지 모니터링하고, 청산되면 거래 결과를 기록합니다.
+    포지션이 청산되면 Bybit에서 모든 청산 주문을 가져와 합산하여 기록합니다.
     """
     print(MESSAGES['monitor_position_close'].format(symbol=symbol))
-    
+
     is_position_open = False
     
     try:
         while True:
-            try:
-                positions_info = bybit_client.get_positions(category="linear", symbol=symbol)
-                
-                if positions_info['retCode'] == 0 and positions_info['result']['list']:
-                    position = positions_info['result']['list'][0]
-                    
-                    if float(position['size']) > 0:
-                        is_position_open = True
-                    
-                    if is_position_open and float(position['size']) == 0:
-                        print(MESSAGES['position_closed_success'].format(symbol=symbol))
-                        
-                        # ✅ 수정: 포지션이 닫힌 시점의 타임스탬프를 기록
-                        closed_timestamp = int(time.time() * 1000)
-                        
-                        # ✅ 수정: startTime, endTime을 설정하여 API에 전달
-                        start_time = closed_timestamp - 5000  # -5초
-                        end_time = closed_timestamp + 5000    # +5초
-                        
-                        for _ in range(30):
-                            closed_pnl_info = bybit_client.get_closed_pnl(
-                                category="linear",
-                                symbol=symbol,
-                                limit=50,
-                                startTime=start_time,
-                                endTime=end_time
-                            )
-                            
-                            if closed_pnl_info['retCode'] == 0 and closed_pnl_info['result']['list']:
-                                # ✅ 수정: orderId를 찾는 로직 대신, 종목명과 시간 기준으로 필터링
-                                closed_trade_data = None
-                                for trade in closed_pnl_info['result']['list']:
-                                    trade_time = int(trade['createdTime'])
-                                    if start_time <= trade_time <= end_time and trade['symbol'] == symbol:
-                                        closed_trade_data = trade
-                                        break
-                                
-                                # ✅ 수정: 찾은 데이터로 기록
-                                if closed_trade_data:
-                                    print(f"✅ 일치하는 거래 기록({closed_trade_data['orderId']})을 찾았습니다.")
-                                    
-                                    open_fee = float(closed_trade_data.get('openFee', 0))
-                                    close_fee = float(closed_trade_data.get('closeFee', 0))
-                                    total_fee = open_fee + close_fee
-
-                                    trade_result = {
-                                        'symbol': closed_trade_data['symbol'],
-                                        'side': closed_trade_data['side'],
-                                        'entry_price': float(closed_trade_data['avgEntryPrice']),
-                                        'exit_price': float(closed_trade_data['avgExitPrice']),
-                                        'qty': float(closed_trade_data['closedSize']),
-                                        'pnl': float(closed_trade_data['closedPnl']),
-                                        'fee': total_fee,
-                                        'created_at': datetime.fromtimestamp(int(closed_trade_data['createdTime']) / 1000).isoformat()
-                                    }
-                                    
-                                    record_trade_result_db(conn, trade_result)
-                                    update_filled_status(conn, message_id, True)
-                                    print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
-                                    await bybit_bot.send_message(
-                                        chat_id=TELE_BYBIT_LOG_CHAT_ID,
-                                        text=MESSAGES['trade_closed_pnl_message'].format(symbol=symbol, pnl=trade_result['pnl'])
-                                    )
-                                    return
-                                else:
-                                    print("⚠️ 일치하는 거래 기록을 찾을 수 없습니다. 2초 후 재시도...")
-                                    await asyncio.sleep(2)
-                            else:
-                                print("⚠️ get_closed_pnl API 응답이 유효하지 않습니다. 재시도합니다.")
-                                await asyncio.sleep(2)
-
-                        log_error_and_send_message(
-                            f"⚠️ {symbol} 포지션의 거래 기록을 찾을 수 없습니다. 수동 확인이 필요합니다.",
-                            chat_id=TELE_BYBIT_LOG_CHAT_ID
-                        )
-                        return
+            positions_info = bybit_client.get_positions(category="linear", symbol=symbol)
             
-            except Exception as e:
-                print(MESSAGES['position_monitor_error'].format(error_msg=e))
+            if positions_info['retCode'] == 0 and positions_info['result']['list']:
+                position = positions_info['result']['list'][0]
                 
+                if float(position['size']) > 0:
+                    is_position_open = True
+                
+                # 포지션이 닫힌 시점 감지
+                if is_position_open and float(position['size']) == 0:
+                    print(MESSAGES['position_closed_success'].format(symbol=symbol))
+                    
+                    # ✅ 수정된 로직 시작
+                    closed_timestamp = int(time.time() * 1000)
+                    start_time = closed_timestamp - (5 * 60 * 1000) # 5분 전까지의 기록을 조회
+                    end_time = closed_timestamp + 5000 
+                    
+                    closed_pnl_records = []
+                    
+                    # API에서 해당 시간대의 모든 기록을 가져옵니다.
+                    closed_pnl_info = bybit_client.get_closed_pnl(
+                        category="linear",
+                        symbol=symbol,
+                        limit=50, # 더 많은 기록을 가져와서 합산할 가능성 높임
+                        startTime=start_time,
+                        endTime=end_time
+                    )
+                    
+                    if closed_pnl_info['retCode'] == 0 and closed_pnl_info['result']['list']:
+                        closed_pnl_records = closed_pnl_info['result']['list']
+                    
+                    if closed_pnl_records:
+                        # ✅ bot.py의 합산 함수를 호출하여 하나의 포지션으로 만듭니다.
+                        aggregated_position = aggregate_closed_positions(closed_pnl_records)[0]
+                        
+                        trade_result = {
+                            'symbol': aggregated_position['symbol'],
+                            'side': aggregated_position['side'],
+                            'entry_price': aggregated_position['avg_entry_price'],
+                            'exit_price': aggregated_position['avg_exit_price'],
+                            'qty': aggregated_position['total_qty'],
+                            'pnl': aggregated_position['total_pnl'],
+                            'fee': aggregated_position['total_fee'],
+                            'created_at': datetime.fromtimestamp(aggregated_position['created_time'] / 1000).isoformat()
+                        }
+                        
+                        print(f"✅ 포지션 청산 완료! PNL 기록({trade_result['pnl']:.2f})을 저장합니다.")
+                        record_trade_result_db(conn, trade_result)
+                        update_filled_status(conn, message_id, True)
+                        print(MESSAGES['trade_record_saved_success'].format(symbol=symbol))
+                        await bybit_bot.send_message(
+                            chat_id=TELE_BYBIT_LOG_CHAT_ID,
+                            text=MESSAGES['trade_closed_pnl_message'].format(symbol=symbol, pnl=trade_result['pnl'])
+                        )
+                        return # 함수 종료
+                    else:
+                        log_error_and_send_message(f"⚠️ {symbol} 포지션에 대한 청산 거래 기록을 찾을 수 없습니다. 수동 확인이 필요합니다.", chat_id=TELE_BYBIT_LOG_CHAT_ID)
+                        return # 기록을 찾지 못했으므로 종료
+                    
             await asyncio.sleep(5)
+
+    except Exception as e:
+        log_error_and_send_message(f"포지션 모니터링 중 오류 발생: {e}", exc=e, chat_id=TELE_BYBIT_LOG_CHAT_ID)
     finally:
         if message_id in monitored_trade_ids:
             monitored_trade_ids.remove(message_id)

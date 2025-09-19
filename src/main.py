@@ -4,10 +4,10 @@ from telethon import events
 import telegram
 import os
 
-from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST_CHANNEL_ID, TELE_BYBIT_BOT_TOKEN, TELE_BYBIT_LOG_CHAT_ID
+from api_clients import client, bybit_client, bybit_bot, TARGET_CHANNEL_ID, TEST_CHANNEL_ID, TELE_BYBIT_LOG_CHAT_ID
 from message_parser import parse_telegram_message, parse_cancel_message, parse_dca_message, parse_close_all_positions 
 from portfolio_manager import generate_report
-from trade_executor import close_all_positions, execute_bybit_order, monitored_trade_ids, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order, update_stop_loss_to_tp1, update_stop_loss_to_tp2
+from trade_executor import close_all_positions, execute_bybit_order, monitored_trade_ids, bybit_client, cancel_bybit_order, update_stop_loss_to_value, place_dca_order
 from utils import MESSAGES, log_error_and_send_message
 from database_manager import setup_database, get_active_orders, get_db_connection
 
@@ -261,9 +261,10 @@ async def my_event_handler_test(event, db_conn):
     if order_info:
         # DB에서 최신 활성 주문 정보 불러오기
         current_active_orders = get_active_orders(db_conn)
-        existing_symbol = next((v['symbol'] for v in current_active_orders.values() if v['symbol'] == order_info['symbol']), None)
+        existing_order = next((v for v in current_active_orders.values() if v['symbol'] == order_info['symbol'] and v['side'] == order_info['side'] and not v['filled']), None)
+        print(existing_order)
 
-        if existing_symbol:
+        if existing_order:
             print(MESSAGES['duplicate_order_warning'].format(symbol=order_info['symbol']))
             log_error_and_send_message(
                 MESSAGES['duplicate_order_reason'],
