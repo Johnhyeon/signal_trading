@@ -9,7 +9,7 @@ from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN, TELE_BYBI
 from portfolio_manager import generate_report
 from trade_executor import send_bybit_summary_msg
 from utils import MESSAGES, log_error_and_send_message
-from database_manager import get_active_orders, get_db_connection, record_trade_result_db
+from database_manager import get_active_orders, get_db_connection, record_trade_result_db, update_filled_status
 
 # 봇 명령어 처리 함수들
 async def open_orders_command(update: Update, context):
@@ -453,15 +453,68 @@ async def button_callback_handler(update: Update, context):
             await query.edit_message_text(text="⚠️ 저장할 기록을 선택하지 않았습니다. 다시 시도해주세요.")
             return
 
-        # 선택된 주문들의 전체 기록을 가져옵니다.
         selected_records = [rec for rec in pnl_records if rec['orderId'] in selected_order_ids]
-        
-        # 합산 함수 호출
         aggregated_data = aggregate_selected_orders(selected_records)
+
+        # PNL 데이터를 메모리에 임시 저장하고, 다음 단계로 넘어갑니다.
+        context.user_data['aggregated_pnl_data'] = aggregated_data
 
         conn = get_db_connection()
         try:
-            # DB 저장에 필요한 데이터로 변환 (aggregate_selected_orders 함수에서 반환되는 포맷에 맞춤)
+            # Filled=0인 활성 주문 목록을 가져옵니다.
+            active_orders_to_show = [
+                order for order in get_active_orders(conn).values() 
+                if order['symbol'] == aggregated_data['symbol'] and not order['filled']
+            ]
+
+            keyboard = []
+            if active_orders_to_show:
+                for order in active_orders_to_show:
+                    message_id = order['message_id']
+                    button_text = f"📊 {order['symbol']} | {order['side']} | Entry: {order['entry_price']}"
+                    callback_data = json.dumps({'a': 'select_active_order', 'msg_id': message_id})
+                    keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+            # 일치하는 활성 주문이 없거나, 연결을 원하지 않을 때를 위한 버튼 추가
+            keyboard.append([InlineKeyboardButton("❌ 연결하지 않고 PNL 기록만 저장", callback_data='{"a": "skip_active_order"}')])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            if active_orders_to_show:
+                await query.edit_message_text(
+                    text="✅ PNL 기록이 준비되었습니다. 이 PNL과 연결할 활성 주문을 선택하세요:",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+            else:
+                # 연결할 활성 주문이 없을 경우 바로 스킵
+                await query.edit_message_text(
+                    text="⚠️ 해당 PNL과 연결할 활성 주문을 찾을 수 없습니다. PNL 기록만 저장합니다."
+                )
+                await query.answer()
+                
+                # 'skip_active_order' 로직을 직접 실행합니다.
+                await handle_skip_active_order(query, context)
+                return
+
+        except Exception as e:
+            log_error_and_send_message(f"활성 주문 목록 가져오는 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
+        finally:
+            conn.close()
+    elif action == "select_active_order":
+        msg_id = data.get('msg_id')
+        aggregated_data = context.user_data.get('aggregated_pnl_data')
+
+        if not aggregated_data:
+            await query.edit_message_text(text="⚠️ PNL 기록 데이터가 유효하지 않습니다. 다시 시도해주세요.")
+            return
+
+        conn = get_db_connection()
+        try:
+            # 1. 선택된 활성 주문의 'filled' 상태를 1로 변경합니다.
+            update_filled_status(conn, msg_id, 1)
+            
+            # 2. 임시 저장된 PNL 기록을 trade_log에 저장합니다.
             trade_data = {
                 'symbol': aggregated_data['symbol'],
                 'side': aggregated_data['side'],
@@ -472,23 +525,25 @@ async def button_callback_handler(update: Update, context):
                 'fee': aggregated_data['fee'],
                 'created_at': datetime.fromtimestamp(aggregated_data['created_at'] / 1000).isoformat()
             }
-            
             record_trade_result_db(conn, trade_data)
-            
+
+            # 3. 임시 데이터 제거 및 최종 메시지 전송
+            del context.user_data['pnl_records']
+            del context.user_data['selected_orders']
+            del context.user_data['aggregated_pnl_data']
+
             await query.edit_message_text(
-                text=f"✅ 선택된 {len(selected_order_ids)}개 주문이 하나의 PNL 기록으로 DB에 저장되었습니다:\n`{trade_data['symbol']}` - `{trade_data['pnl']:.2f}` USDT"
+                text=f"✅ 선택한 활성 주문({msg_id})이 '체결 완료' 상태로 변경되었으며, PNL 기록이 성공적으로 저장되었습니다."
             )
-            
-            # 저장 후 메모리에서 임시 기록 삭제
-            if 'pnl_records' in context.user_data:
-                del context.user_data['pnl_records']
-            if 'selected_orders' in context.user_data:
-                del context.user_data['selected_orders']
 
         except Exception as e:
-            log_error_and_send_message(f"DB 저장 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
+            log_error_and_send_message(f"활성 주문 업데이트 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
         finally:
             conn.close()
+
+    elif action == "skip_active_order":
+        # '연결하지 않고 저장' 버튼을 눌렀을 때의 로직
+        await handle_skip_active_order(query, context)
     elif callback_data == "open_orders":
         await open_orders_command(update, context)
     elif callback_data == "positions":
@@ -546,6 +601,43 @@ def aggregate_selected_orders(records):
         aggregated_data['exit_price'] = 0.0
 
     return aggregated_data
+
+async def handle_skip_active_order(query, context):
+    """
+    PNL 기록만 저장하고 활성 주문을 건너뛰는 헬퍼 함수
+    """
+    aggregated_data = context.user_data.get('aggregated_pnl_data')
+
+    if not aggregated_data:
+        await query.edit_message_text(text="⚠️ PNL 기록 데이터가 유효하지 않습니다. 다시 시도해주세요.")
+        return
+
+    conn = get_db_connection()
+    try:
+        trade_data = {
+            'symbol': aggregated_data['symbol'],
+            'side': aggregated_data['side'],
+            'entry_price': aggregated_data['entry_price'],
+            'exit_price': aggregated_data['exit_price'],
+            'qty': aggregated_data['qty'],
+            'pnl': aggregated_data['pnl'],
+            'fee': aggregated_data['fee'],
+            'created_at': datetime.fromtimestamp(aggregated_data['created_at'] / 1000).isoformat()
+        }
+        record_trade_result_db(conn, trade_data)
+
+        # 임시 데이터 제거
+        del context.user_data['pnl_records']
+        del context.user_data['selected_orders']
+        del context.user_data['aggregated_pnl_data']
+
+        await query.edit_message_text(
+            text=f"✅ PNL 기록이 DB에 성공적으로 저장되었습니다. (활성 주문 건너뜀)"
+        )
+    except Exception as e:
+        log_error_and_send_message(f"PNL 기록 저장 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
+    finally:
+        conn.close()
 
 def main():
     application = Application.builder().token(TELE_BYBIT_BOT_TOKEN).build()
