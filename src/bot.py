@@ -331,6 +331,9 @@ async def menu_command(update: Update, context):
         ],
         [
             InlineKeyboardButton(MESSAGES['menu_cancel_all'], callback_data="cancel_all")
+        ],
+        [
+            InlineKeyboardButton("✨ 중복 기록 정리", callback_data="dup_cleanup")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -351,14 +354,11 @@ async def pnl_add_command(update: Update, context):
             return
 
         symbol = context.args[0].upper() + 'USDT'
-        # Bybit API에서 최근 50개의 closed order 기록을 가져옵니다.
         response = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=5)
 
         if response['retCode'] == 0 and response['result']['list']:
             records = response['result']['list']
             
-            # --- 수정된 부분: 
-            # 봇 메모리(context.user_data)에 전체 기록과 사용자의 선택 리스트를 초기화합니다.
             context.user_data['pnl_records'] = records
             context.user_data['selected_orders'] = []
 
@@ -368,15 +368,12 @@ async def pnl_add_command(update: Update, context):
                 qty = float(record['closedSize'])
                 created_time = datetime.fromtimestamp(int(record['createdTime']) / 1000).strftime('%m-%d %H:%M')
                 
-                # 버튼 텍스트: PNL, 수량, 시간
                 button_text = f"PNL: {pnl:.2f} | QTY: {qty:.4f} | {created_time}"
                 
-                # 콜백 데이터: 액션과 기록의 인덱스만 포함 (64바이트 제한 회피)
                 callback_data = json.dumps({'a': 'select_pnl', 'idx': idx})
                 keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
             
             if keyboard:
-                # '완료' 버튼을 추가합니다.
                 keyboard.append([InlineKeyboardButton("✅ 선택 완료 및 저장", callback_data='{"a": "complete_pnl"}')])
                 
                 reply_markup = InlineKeyboardMarkup(keyboard)
@@ -399,6 +396,30 @@ async def pnl_add_command(update: Update, context):
     except Exception as e:
         log_error_and_send_message(f"오류 발생: {e}", exc=e, chat_id=update.effective_chat.id)
 
+async def pnl_dup_command(update: Update, context):
+    """
+    DB의 trade_log 테이블에서 중복된 레코드를 정리하는 명령어
+    """
+    try:
+        deleted_count = clean_up_duplicate_trade_log()
+        
+        if deleted_count > 0:
+            message_text = f"✅ 중복된 거래 기록 {deleted_count}개를 삭제했습니다."
+        else:
+            message_text = "ℹ️ 중복된 거래 기록이 없습니다."
+
+        await bybit_bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=message_text,
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        log_error_and_send_message(
+            f"중복 기록 정리 중 오류 발생: {e}",
+            exc=e,
+            chat_id=update.effective_chat.id
+        )
+
 async def button_callback_handler(update: Update, context):
     query = update.callback_query
     await query.answer()
@@ -407,7 +428,6 @@ async def button_callback_handler(update: Update, context):
     data = json.loads(query.data)
     action = data.get('a')
 
-    # 개별 주문 선택/취소 로직
     if action == "select_pnl":
         idx = data.get('idx')
         pnl_records = context.user_data.get('pnl_records', [])
@@ -416,7 +436,6 @@ async def button_callback_handler(update: Update, context):
         if idx is not None and len(pnl_records) > idx:
             record_id = pnl_records[idx]['orderId']
             
-            # 선택 토글
             if record_id in selected_orders:
                 selected_orders.remove(record_id)
             else:
@@ -424,7 +443,6 @@ async def button_callback_handler(update: Update, context):
 
             context.user_data['selected_orders'] = selected_orders
             
-            # 버튼 텍스트 업데이트 (선택 여부 표시)
             updated_keyboard = []
             for r_idx, record in enumerate(pnl_records):
                 pnl = float(record['closedPnl'])
@@ -437,13 +455,11 @@ async def button_callback_handler(update: Update, context):
                 callback_data = json.dumps({'a': 'select_pnl', 'idx': r_idx})
                 updated_keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
             
-            # 완료 버튼 다시 추가
             updated_keyboard.append([InlineKeyboardButton("✅ 선택 완료 및 저장", callback_data='{"a": "complete_pnl"}')])
             
             reply_markup = InlineKeyboardMarkup(updated_keyboard)
             await query.edit_message_reply_markup(reply_markup=reply_markup)
             
-    # 선택 완료 및 저장 로직
     elif action == "complete_pnl":
         pnl_records = context.user_data.get('pnl_records', [])
         selected_order_ids = context.user_data.get('selected_orders', [])
@@ -455,12 +471,18 @@ async def button_callback_handler(update: Update, context):
         selected_records = [rec for rec in pnl_records if rec['orderId'] in selected_order_ids]
         aggregated_data = aggregate_selected_orders(selected_records)
 
-        # PNL 데이터를 메모리에 임시 저장하고, 다음 단계로 넘어갑니다.
         context.user_data['aggregated_pnl_data'] = aggregated_data
+        
+        # 새로운 중복 제거 함수 호출
+        is_duplicate = check_and_delete_duplicate_trade_log(aggregated_data)
+        if is_duplicate:
+            await query.edit_message_text(
+                text="❌ 동일한 PNL 기록이 이미 존재합니다. 중복 기록은 삭제되었습니다."
+            )
+            return
 
         conn = get_db_connection()
         try:
-            # Filled=0인 활성 주문 목록을 가져옵니다.
             active_orders_to_show = [
                 order for order in get_active_orders(conn).values() 
                 if order['symbol'] == aggregated_data['symbol'] and not order['filled']
@@ -474,7 +496,6 @@ async def button_callback_handler(update: Update, context):
                     callback_data = json.dumps({'a': 'select_active_order', 'msg_id': message_id})
                     keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
             
-            # 일치하는 활성 주문이 없거나, 연결을 원하지 않을 때를 위한 버튼 추가
             keyboard.append([InlineKeyboardButton("❌ 연결하지 않고 PNL 기록만 저장", callback_data='{"a": "skip_active_order"}')])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -486,13 +507,11 @@ async def button_callback_handler(update: Update, context):
                     parse_mode='Markdown'
                 )
             else:
-                # 연결할 활성 주문이 없을 경우 바로 스킵
                 await query.edit_message_text(
                     text="⚠️ 해당 PNL과 연결할 활성 주문을 찾을 수 없습니다. PNL 기록만 저장합니다."
                 )
                 await query.answer()
                 
-                # 'skip_active_order' 로직을 직접 실행합니다.
                 await handle_skip_active_order(query, context)
                 return
 
@@ -510,10 +529,8 @@ async def button_callback_handler(update: Update, context):
 
         conn = get_db_connection()
         try:
-            # 1. 선택된 활성 주문의 'filled' 상태를 1로 변경합니다.
             update_filled_status(conn, msg_id, 1)
             
-            # 2. 임시 저장된 PNL 기록을 trade_log에 저장합니다.
             trade_data = {
                 'symbol': aggregated_data['symbol'],
                 'side': aggregated_data['side'],
@@ -526,7 +543,6 @@ async def button_callback_handler(update: Update, context):
             }
             record_trade_result_db(conn, trade_data)
 
-            # 3. 임시 데이터 제거 및 최종 메시지 전송
             del context.user_data['pnl_records']
             del context.user_data['selected_orders']
             del context.user_data['aggregated_pnl_data']
@@ -541,7 +557,6 @@ async def button_callback_handler(update: Update, context):
             conn.close()
 
     elif action == "skip_active_order":
-        # '연결하지 않고 저장' 버튼을 눌렀을 때의 로직
         await handle_skip_active_order(query, context)
     elif callback_data == "open_orders":
         await open_orders_command(update, context)
@@ -557,6 +572,8 @@ async def button_callback_handler(update: Update, context):
         await health_command(update, context)
     elif callback_data == "cancel_all":
         await cancel_all_command(update, context)
+    elif callback_data == "dup_cleanup":
+        await pnl_dup_command(update, context)
 
 def aggregate_selected_orders(records):
     """
@@ -565,7 +582,6 @@ def aggregate_selected_orders(records):
     if not records:
         return None
     
-    # 첫 번째 기록을 기준으로 기본 데이터 설정
     first_record = records[0]
     total_pnl = 0.0
     total_qty = 0.0
@@ -582,7 +598,6 @@ def aggregate_selected_orders(records):
         total_exit_value += float(record.get('cumExitValue', 0))
         latest_created_time = max(latest_created_time, int(record['createdTime']))
     
-    # 최종 결과 계산
     aggregated_data = {
         'symbol': first_record['symbol'],
         'side': first_record['side'],
@@ -610,6 +625,13 @@ async def handle_skip_active_order(query, context):
     if not aggregated_data:
         await query.edit_message_text(text="⚠️ PNL 기록 데이터가 유효하지 않습니다. 다시 시도해주세요.")
         return
+    
+    is_duplicate = check_and_delete_duplicate_trade_log(aggregated_data)
+    if is_duplicate:
+        await query.edit_message_text(
+            text="❌ 동일한 PNL 기록이 이미 존재합니다. 중복 기록은 삭제되었습니다."
+        )
+        return
 
     conn = get_db_connection()
     try:
@@ -625,7 +647,6 @@ async def handle_skip_active_order(query, context):
         }
         record_trade_result_db(conn, trade_data)
 
-        # 임시 데이터 제거
         del context.user_data['pnl_records']
         del context.user_data['selected_orders']
         del context.user_data['aggregated_pnl_data']
@@ -635,6 +656,84 @@ async def handle_skip_active_order(query, context):
         )
     except Exception as e:
         log_error_and_send_message(f"PNL 기록 저장 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
+    finally:
+        conn.close()
+
+def check_and_delete_duplicate_trade_log(trade_data):
+    """
+    단일 trade_data에 대한 중복 레코드를 확인하고 삭제
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    pnl_rounded = round(trade_data['pnl'], 6)
+    qty_rounded = round(trade_data['qty'], 6)
+    created_at_dt = datetime.fromtimestamp(trade_data['created_at'] / 1000)
+    created_at_str = created_at_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+    try:
+        cursor.execute("""
+            SELECT COUNT(*) FROM trade_log
+            WHERE symbol = ? AND side = ? AND pnl = ? AND qty = ? AND created_at = ?
+        """, (trade_data['symbol'], trade_data['side'], pnl_rounded, qty_rounded, created_at_str))
+        count = cursor.fetchone()[0]
+
+        if count > 0:
+            print("❌ 중복 레코드가 발견되었습니다. 삭제합니다.")
+            cursor.execute("""
+                DELETE FROM trade_log
+                WHERE symbol = ? AND side = ? AND pnl = ? AND qty = ? AND created_at = ?
+            """, (trade_data['symbol'], trade_data['side'], pnl_rounded, qty_rounded, created_at_str))
+            conn.commit()
+            return True
+        else:
+            print("✅ 중복 레코드가 없습니다. 정상적으로 진행합니다.")
+            return False
+
+    except Exception as e:
+        print(f"중복 레코드 확인 및 삭제 중 오류 발생: {e}")
+        return False
+    finally:
+        conn.close()
+
+def clean_up_duplicate_trade_log():
+    """
+    DB의 trade_log 테이블 전체를 스캔하여 중복된 레코드를 모두 삭제
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    deleted_count = 0
+    try:
+        # 중복된 레코드를 찾는 쿼리
+        cursor.execute("""
+            SELECT symbol, side, pnl, qty, created_at, MIN(rowid)
+            FROM trade_log
+            GROUP BY symbol, side, pnl, qty, created_at
+            HAVING COUNT(*) > 1
+        """)
+        duplicates = cursor.fetchall()
+        
+        if not duplicates:
+            print("ℹ️ DB에 중복된 레코드가 없습니다.")
+            return 0
+
+        # 중복된 각 그룹에서 가장 오래된 하나를 제외하고 모두 삭제
+        for dup in duplicates:
+            symbol, side, pnl, qty, created_at, min_rowid = dup
+            cursor.execute("""
+                DELETE FROM trade_log
+                WHERE symbol = ? AND side = ? AND pnl = ? AND qty = ? AND created_at = ? AND rowid != ?
+            """, (symbol, side, pnl, qty, created_at, min_rowid))
+            deleted_count += cursor.rowcount
+        
+        conn.commit()
+        print(f"✅ DB에서 중복된 레코드 {deleted_count}개를 삭제했습니다.")
+        return deleted_count
+    
+    except Exception as e:
+        print(f"전체 중복 레코드 정리 중 오류 발생: {e}")
+        conn.rollback()
+        return 0
     finally:
         conn.close()
 
@@ -651,6 +750,7 @@ def main():
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("menu", menu_command))
     application.add_handler(CommandHandler("pnl_add", pnl_add_command))
+    application.add_handler(CommandHandler("pnl_dup", pnl_dup_command))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
     print("Telegram bot started...")
