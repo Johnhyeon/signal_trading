@@ -9,7 +9,7 @@ from api_clients import bybit_client, bybit_bot, TELE_BYBIT_BOT_TOKEN, TELE_BYBI
 from portfolio_manager import generate_report
 from trade_executor import send_bybit_summary_msg
 from utils import MESSAGES, log_error_and_send_message
-from database_manager import get_active_orders, get_db_connection
+from database_manager import get_active_orders, get_db_connection, record_trade_result_db
 
 # 봇 명령어 처리 함수들
 async def open_orders_command(update: Update, context):
@@ -342,13 +342,103 @@ async def menu_command(update: Update, context):
         reply_markup=reply_markup
     )
 
+async def pnl_add_command(update: Update, context):
+    try:
+        if not context.args:
+            await bybit_bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="⚠️ 사용법: /pnl_add [심볼명] (예: /pnl_add BTC)"
+            )
+            return
+
+        symbol = context.args[0].upper() + 'USDT'
+        response = bybit_client.get_closed_pnl(category="linear", symbol=symbol, limit=5)
+
+        if response['retCode'] == 0 and response['result']['list']:
+            records = response['result']['list']
+            keyboard = []
+            
+            # 봇 메모리(context.user_data)에 임시로 기록 저장
+            context.user_data['pnl_records'] = records
+
+            for idx, record in enumerate(records):
+                pnl = float(record['closedPnl'])
+                created_time = datetime.fromtimestamp(int(record['createdTime']) / 1000).strftime('%m-%d %H:%M')
+                button_text = f"PNL: {pnl:.2f} | {created_time}"
+                
+                # 콜백 데이터에는 인덱스와 액션만 담습니다.
+                callback_data = json.dumps({'a': 'add_pnl', 'idx': idx})
+                
+                keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+            if keyboard:
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await bybit_bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"📊 **{symbol}**의 최근 청산 기록입니다. DB에 저장할 기록을 선택하세요:",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+            else:
+                await bybit_bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text="⚠️ 청산 기록을 찾을 수 없습니다."
+                )
+        else:
+            await bybit_bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"⚠️ 종목 '{symbol}'의 청산 기록을 찾을 수 없습니다."
+            )
+
+    except Exception as e:
+        log_error_and_send_message(f"오류 발생: {e}", exc=e, chat_id=update.effective_chat.id)
+
 async def button_callback_handler(update: Update, context):
     query = update.callback_query
     await query.answer()
 
     callback_data = query.data
-    
-    if callback_data == "open_orders":
+    data = json.loads(callback_data)
+    action = data.get('a')
+
+    if action == "add_pnl":
+        idx = data.get('idx')
+        
+        # 메모리(context.user_data)에서 기록을 불러옵니다.
+        records = context.user_data.get('pnl_records', [])
+        
+        if idx is not None and len(records) > idx:
+            record = records[idx]
+            conn = get_db_connection()
+            try:
+                # DB 저장에 필요한 데이터로 변환
+                trade_data = {
+                    'symbol': record['symbol'],
+                    'side': record['side'],
+                    'entry_price': float(record['avgEntryPrice']),
+                    'exit_price': float(record['avgExitPrice']),
+                    'qty': float(record['closedSize']),
+                    'pnl': float(record['closedPnl']),
+                    'fee': float(record.get('openFee', 0)) + float(record.get('closeFee', 0)),
+                    'created_at': datetime.fromtimestamp(int(record['createdTime']) / 1000).isoformat()
+                }
+                
+                record_trade_result_db(conn, trade_data)
+                
+                # 성공 메시지
+                await query.edit_message_text(text=f"✅ PNL 기록이 DB에 성공적으로 저장되었습니다:\n`{trade_data['symbol']}` - `{trade_data['pnl']:.2f}` USDT")
+                
+                # 저장 후 메모리에서 기록 삭제 (선택 사항)
+                if 'pnl_records' in context.user_data:
+                    del context.user_data['pnl_records']
+
+            except Exception as e:
+                log_error_and_send_message(f"DB 저장 중 오류 발생: {e}", exc=e, chat_id=query.message.chat_id)
+            finally:
+                conn.close()
+        else:
+            await query.edit_message_text(text="⚠️ 해당 기록을 찾을 수 없습니다. 다시 시도해주세요.")
+    elif callback_data == "open_orders":
         await open_orders_command(update, context)
     elif callback_data == "positions":
         await positions_command(update, context)
@@ -375,6 +465,7 @@ def main():
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(CommandHandler("pnl_add", pnl_add_command))
     application.add_handler(CallbackQueryHandler(button_callback_handler))
     
     print("Telegram bot started...")
